@@ -1,0 +1,415 @@
+# ============================================================================
+# src/rhi/CMakeLists.txt - UPDATED
+# ============================================================================
+set(RHI_SOURCES
+    GraphicsDevice.cpp
+)
+
+set(RHI_HEADERS
+    ${CMAKE_SOURCE_DIR}/include/pbr/rhi/GraphicsDevice.h
+    ${CMAKE_SOURCE_DIR}/include/pbr/rhi/Types.h
+    ${CMAKE_SOURCE_DIR}/include/pbr/rhi/Buffer.h
+    ${CMAKE_SOURCE_DIR}/include/pbr/rhi/Texture.h
+    ${CMAKE_SOURCE_DIR}/include/pbr/rhi/Shader.h
+    ${CMAKE_SOURCE_DIR}/include/pbr/rhi/Pipeline.h
+    ${CMAKE_SOURCE_DIR}/include/pbr/rhi/CommandBuffer.h
+    ${CMAKE_SOURCE_DIR}/include/pbr/rhi/SwapChain.h
+)
+
+# Vulkan-specific sources
+if(PBR_USE_VULKAN)
+    list(APPEND RHI_SOURCES
+        vulkan/VulkanTypes.cpp
+        vulkan/VulkanDevice.cpp
+        vulkan/VulkanSwapChain.cpp
+        vulkan/VulkanBuffer.cpp
+        vulkan/VulkanTexture.cpp
+        vulkan/VulkanShader.cpp
+        vulkan/VulkanPipeline.cpp
+        vulkan/VulkanCommandBuffer.cpp
+    )
+    list(APPEND RHI_HEADERS
+        ${CMAKE_SOURCE_DIR}/include/pbr/rhi/vulkan/VulkanTypes.h
+        ${CMAKE_SOURCE_DIR}/include/pbr/rhi/vulkan/VulkanDevice.h
+        ${CMAKE_SOURCE_DIR}/include/pbr/rhi/vulkan/VulkanSwapChain.h
+        ${CMAKE_SOURCE_DIR}/include/pbr/rhi/vulkan/VulkanBuffer.h
+        ${CMAKE_SOURCE_DIR}/include/pbr/rhi/vulkan/VulkanTexture.h
+        ${CMAKE_SOURCE_DIR}/include/pbr/rhi/vulkan/VulkanShader.h
+        ${CMAKE_SOURCE_DIR}/include/pbr/rhi/vulkan/VulkanPipeline.h
+        ${CMAKE_SOURCE_DIR}/include/pbr/rhi/vulkan/VulkanCommandBuffer.h
+    )
+endif()
+
+add_library(pbr_rhi STATIC ${RHI_SOURCES} ${RHI_HEADERS})
+
+target_include_directories(pbr_rhi
+    PUBLIC
+        ${CMAKE_SOURCE_DIR}/include
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+target_link_libraries(pbr_rhi
+    PUBLIC
+        pbr_core
+)
+
+# Vulkan
+if(PBR_USE_VULKAN)
+    find_package(Vulkan)
+    if(Vulkan_FOUND)
+        target_link_libraries(pbr_rhi PUBLIC Vulkan::Vulkan)
+        target_compile_definitions(pbr_rhi PUBLIC PBR_USE_VULKAN)
+        message(STATUS "Vulkan found: ${Vulkan_VERSION}")
+    else()
+        message(WARNING "Vulkan SDK not found. Vulkan support will be disabled.")
+        set(PBR_USE_VULKAN OFF CACHE BOOL "Vulkan support disabled (SDK not found)" FORCE)
+    endif()
+endif()
+
+# ============================================================================
+# src/rhi/GraphicsDevice.cpp - UPDATED FACTORY
+# ============================================================================
+#include "pbr/core/Logger.h"
+#include "pbr/rhi/GraphicsDevice.h"
+
+#ifdef PBR_USE_VULKAN
+#include "pbr/rhi/vulkan/VulkanDevice.h"
+#endif
+
+namespace pbr {
+namespace rhi {
+
+Ref<GraphicsDevice> CreateGraphicsDevice(GraphicsAPI api, void* nativeWindowHandle) {
+    switch (api) {
+#ifdef PBR_USE_VULKAN
+        case GraphicsAPI::Vulkan:
+            PBR_INFO << "Creating Vulkan graphics device...";
+            return CreateRef<VulkanDevice>(static_cast<SDL_Window*>(nativeWindowHandle));
+#endif
+            
+#ifdef PBR_USE_D3D12
+        case GraphicsAPI::Direct3D12:
+            PBR_ERROR << "Direct3D 12 not yet implemented (Milestone 4.1)";
+            return nullptr;
+#endif
+            
+#ifdef PBR_USE_METAL
+        case GraphicsAPI::Metal:
+            PBR_ERROR << "Metal not yet implemented (Milestone 4.2)";
+            return nullptr;
+#endif
+            
+#ifdef PBR_USE_WEBGPU
+        case GraphicsAPI::WebGPU:
+            PBR_ERROR << "WebGPU not yet implemented (Milestone 4.3)";
+            return nullptr;
+#endif
+            
+        default:
+            PBR_ERROR << "Unknown or unsupported graphics API";
+            return nullptr;
+    }
+}
+
+} // namespace rhi
+} // namespace pbr
+
+// ============================================================================
+// src/app/Application.cpp - UPDATED WITH TRIANGLE RENDERING
+// ============================================================================
+#include "pbr/core/Logger.h"
+#include "Application.h"
+#include "pbr/rhi/GraphicsDevice.h"
+#include <SDL3/SDL_vulkan.h>
+
+namespace pbr {
+
+Application::Application(const ApplicationConfig& config)
+    : m_Config(config) {
+    Init();
+}
+
+Application::~Application() {
+    Shutdown();
+}
+
+void Application::Init() {
+    PBR_INFO << "Initializing application...";
+    
+    // Initialize SDL
+    if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS)) {
+        PBR_CRITICAL << "Failed to initialize SDL: " << SDL_GetError();
+        return;
+    }
+    
+    PBR_INFO << "SDL initialized successfully";
+    
+    // Create window
+    uint32_t windowFlags = SDL_WINDOW_RESIZABLE;
+    
+#ifdef PBR_USE_VULKAN
+    windowFlags |= SDL_WINDOW_VULKAN;
+    PBR_INFO << "Creating window with Vulkan support";
+#endif
+    
+    m_Window = SDL_CreateWindow(
+        m_Config.title.c_str(),
+        m_Config.width,
+        m_Config.height,
+        windowFlags
+    );
+    
+    if (!m_Window) {
+        PBR_CRITICAL << "Failed to create window: " << SDL_GetError();
+        SDL_Quit();
+        return;
+    }
+    
+    PBR_INFO << "Window created: " << m_Config.width << "x" << m_Config.height;
+    
+    // Create graphics device
+#ifdef PBR_USE_VULKAN
+    m_Device = rhi::CreateGraphicsDevice(rhi::GraphicsAPI::Vulkan, m_Window);
+    if (!m_Device) {
+        PBR_ERROR << "Failed to create graphics device";
+        return;
+    }
+#endif
+    
+    // Create triangle resources
+    CreateTriangle();
+    
+    m_Running = true;
+}
+
+void Application::CreateTriangle() {
+    using namespace rhi;
+    
+    // Vertex data: position (vec3) + color (vec3)
+    float vertices[] = {
+         0.0f,  0.5f, 0.0f,   1.0f, 0.0f, 0.0f,  // Top (red)
+        -0.5f, -0.5f, 0.0f,   0.0f, 1.0f, 0.0f,  // Bottom-left (green)
+         0.5f, -0.5f, 0.0f,   0.0f, 0.0f, 1.0f   // Bottom-right (blue)
+    };
+    
+    // Create vertex buffer
+    BufferDesc vertexBufferDesc{};
+    vertexBufferDesc.size = sizeof(vertices);
+    vertexBufferDesc.usage = BufferUsage::Vertex;
+    vertexBufferDesc.memoryUsage = MemoryUsage::CPUToGPU;
+    
+    m_VertexBuffer = m_Device->CreateBuffer(vertexBufferDesc);
+    m_VertexBuffer->CopyData(vertices, sizeof(vertices));
+    
+    // Create shaders (SPIR-V bytecode)
+    // Vertex shader
+    std::vector<uint8> vertShaderCode = {
+        // This is a minimal SPIR-V bytecode for a simple pass-through vertex shader
+        // In practice, you'd compile from GLSL using glslangValidator or similar
+        #include "triangle.vert.spv.inl"
+    };
+    
+    ShaderDesc vertShaderDesc{};
+    vertShaderDesc.stage = ShaderStage::Vertex;
+    vertShaderDesc.code = vertShaderCode;
+    vertShaderDesc.entryPoint = "main";
+    
+    auto vertShader = m_Device->CreateShader(vertShaderDesc);
+    
+    // Fragment shader
+    std::vector<uint8> fragShaderCode = {
+        #include "triangle.frag.spv.inl"
+    };
+    
+    ShaderDesc fragShaderDesc{};
+    fragShaderDesc.stage = ShaderStage::Fragment;
+    fragShaderDesc.code = fragShaderCode;
+    fragShaderDesc.entryPoint = "main";
+    
+    auto fragShader = m_Device->CreateShader(fragShaderDesc);
+    
+    // Create pipeline
+    PipelineDesc pipelineDesc{};
+    pipelineDesc.vertexShader = vertShader;
+    pipelineDesc.fragmentShader = fragShader;
+    
+    // Vertex input: position and color
+    pipelineDesc.vertexInput.stride = sizeof(float) * 6;
+    pipelineDesc.vertexInput.attributes = {
+        { 0, Format::R32G32B32_SFLOAT, 0 },                // position at location 0
+        { 1, Format::R32G32B32_SFLOAT, sizeof(float) * 3 } // color at location 1
+    };
+    
+    pipelineDesc.topology = PrimitiveTopology::TriangleList;
+    pipelineDesc.rasterization.cullMode = CullMode::None;
+    
+    m_Pipeline = m_Device->CreateGraphicsPipeline(pipelineDesc);
+    
+    PBR_INFO << "Triangle resources created";
+}
+
+void Application::Run() {
+    PBR_INFO << "Starting main loop...";
+    
+    uint64_t lastTime = SDL_GetTicksNS();
+    
+    while (m_Running) {
+        // Calculate delta time
+        uint64_t currentTime = SDL_GetTicksNS();
+        float deltaTime = (currentTime - lastTime) / 1000000000.0f;
+        lastTime = currentTime;
+        
+        ProcessEvents();
+        Update(deltaTime);
+        Render();
+    }
+    
+    PBR_INFO << "Main loop ended";
+}
+
+void Application::ProcessEvents() {
+    SDL_Event event;
+    while (SDL_PollEvent(&event)) {
+        switch (event.type) {
+            case SDL_EVENT_QUIT:
+                PBR_INFO << "Quit event received";
+                m_Running = false;
+                break;
+                
+            case SDL_EVENT_KEY_DOWN:
+                if (event.key.key == SDLK_ESCAPE) {
+                    PBR_INFO << "Escape key pressed";
+                    m_Running = false;
+                }
+                break;
+                
+            case SDL_EVENT_WINDOW_RESIZED:
+                PBR_INFO << "Window resized: " << event.window.data1 << "x" << event.window.data2;
+                if (m_Device) {
+                    m_Device->GetSwapChain()->Resize(event.window.data1, event.window.data2);
+                }
+                break;
+        }
+    }
+}
+
+void Application::Update(float deltaTime) {
+    (void)deltaTime;
+}
+
+void Application::Render() {
+    using namespace rhi;
+    
+    if (!m_Device) return;
+    
+    auto swapChain = m_Device->GetSwapChain();
+    auto backBuffer = swapChain->GetCurrentBackBuffer();
+    
+    // Create command buffer
+    auto cmd = m_Device->CreateCommandBuffer();
+    cmd->Begin();
+    
+    // Begin rendering
+    ClearValue clearValue{};
+    clearValue.color[0] = 0.1f;
+    clearValue.color[1] = 0.1f;
+    clearValue.color[2] = 0.15f;
+    clearValue.color[3] = 1.0f;
+    
+    cmd->BeginRendering({ backBuffer }, nullptr, { clearValue });
+    
+    // Set viewport and scissor
+    Viewport viewport{};
+    viewport.width = static_cast<float>(swapChain->GetWidth());
+    viewport.height = static_cast<float>(swapChain->GetHeight());
+    viewport.minDepth = 0.0f;
+    viewport.maxDepth = 1.0f;
+    cmd->SetViewport(viewport);
+    
+    Rect2D scissor{};
+    scissor.width = swapChain->GetWidth();
+    scissor.height = swapChain->GetHeight();
+    cmd->SetScissor(scissor);
+    
+    // Draw triangle
+    cmd->BindPipeline(m_Pipeline);
+    cmd->BindVertexBuffer(m_VertexBuffer);
+    cmd->Draw(3);
+    
+    cmd->EndRendering();
+    cmd->End();
+    
+    // Submit and present
+    m_Device->SubmitCommandBuffer(cmd);
+    swapChain->Present();
+}
+
+void Application::Shutdown() {
+    if (m_Device) {
+        m_Device->WaitIdle();
+    }
+    
+    m_Pipeline.reset();
+    m_VertexBuffer.reset();
+    m_Device.reset();
+    
+    if (m_Window) {
+        PBR_INFO << "Destroying window...";
+        SDL_DestroyWindow(m_Window);
+        m_Window = nullptr;
+    }
+    
+    PBR_INFO << "Shutting down SDL...";
+    SDL_Quit();
+}
+
+} // namespace pbr
+
+// ============================================================================
+// src/app/Application.h - UPDATED HEADER
+// ============================================================================
+#pragma once
+
+#include "pbr/core/Types.h"
+#include "pbr/rhi/GraphicsDevice.h"
+#include "pbr/rhi/Buffer.h"
+#include "pbr/rhi/Pipeline.h"
+#include <SDL3/SDL.h>
+#include <string>
+
+namespace pbr {
+
+struct ApplicationConfig {
+    std::string title = "PBR Renderer";
+    uint32 width = 1280;
+    uint32 height = 720;
+    bool vsync = true;
+};
+
+class Application {
+public:
+    Application(const ApplicationConfig& config);
+    ~Application();
+
+    void Run();
+    void Shutdown();
+
+private:
+    void Init();
+    void CreateTriangle();
+    void ProcessEvents();
+    void Update(float deltaTime);
+    void Render();
+
+    ApplicationConfig m_Config;
+    SDL_Window* m_Window = nullptr;
+    bool m_Running = false;
+    
+    // Graphics resources
+    rhi::Ref<rhi::GraphicsDevice> m_Device;
+    rhi::Ref<rhi::Buffer> m_VertexBuffer;
+    rhi::Ref<rhi::Pipeline> m_Pipeline;
+};
+
+} // namespace pbr

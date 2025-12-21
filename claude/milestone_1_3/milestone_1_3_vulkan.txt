@@ -1,0 +1,374 @@
+// ============================================================================
+// include/pbr/rhi/vulkan/VulkanTypes.h
+// ============================================================================
+#pragma once
+
+#include "pbr/core/Types.h"
+#include <vulkan/vulkan.h>
+#include <vector>
+
+namespace pbr {
+namespace rhi {
+
+// Helper to check Vulkan results
+#define VK_CHECK(call) \
+    do { \
+        VkResult result = call; \
+        if (result != VK_SUCCESS) { \
+            PBR_ERROR << "Vulkan error: " << result << " at " << __FILE__ << ":" << __LINE__; \
+        } \
+    } while(0)
+
+// Vulkan context shared across all Vulkan objects
+struct VulkanContext {
+    VkInstance instance = VK_NULL_HANDLE;
+    VkPhysicalDevice physicalDevice = VK_NULL_HANDLE;
+    VkDevice device = VK_NULL_HANDLE;
+    VkQueue graphicsQueue = VK_NULL_HANDLE;
+    VkQueue presentQueue = VK_NULL_HANDLE;
+    uint32 graphicsQueueFamily = 0;
+    uint32 presentQueueFamily = 0;
+    VkSurfaceKHR surface = VK_NULL_HANDLE;
+    
+    VkPhysicalDeviceProperties deviceProperties;
+    VkPhysicalDeviceFeatures deviceFeatures;
+    VkPhysicalDeviceMemoryProperties memoryProperties;
+};
+
+// Format conversion utilities
+VkFormat ToVulkanFormat(Format format);
+Format FromVulkanFormat(VkFormat format);
+
+VkBufferUsageFlags ToVulkanBufferUsage(BufferUsage usage);
+VkMemoryPropertyFlags ToVulkanMemoryUsage(MemoryUsage usage);
+
+VkShaderStageFlagBits ToVulkanShaderStage(ShaderStage stage);
+VkPrimitiveTopology ToVulkanTopology(PrimitiveTopology topology);
+VkPolygonMode ToVulkanPolygonMode(PolygonMode mode);
+VkCullModeFlags ToVulkanCullMode(CullMode mode);
+VkFrontFace ToVulkanFrontFace(FrontFace face);
+VkCompareOp ToVulkanCompareOp(CompareOp op);
+
+} // namespace rhi
+} // namespace pbr
+
+// ============================================================================
+// include/pbr/rhi/vulkan/VulkanDevice.h
+// ============================================================================
+#pragma once
+
+#include "pbr/rhi/GraphicsDevice.h"
+#include "VulkanTypes.h"
+#include <SDL3/SDL_vulkan.h>
+
+namespace pbr {
+namespace rhi {
+
+class VulkanDevice : public GraphicsDevice {
+public:
+    VulkanDevice(SDL_Window* window);
+    ~VulkanDevice() override;
+
+    // GraphicsDevice interface
+    const DeviceInfo& GetDeviceInfo() const override { return m_DeviceInfo; }
+    
+    Ref<Buffer> CreateBuffer(const BufferDesc& desc) override;
+    Ref<Texture> CreateTexture(const TextureDesc& desc) override;
+    Ref<Shader> CreateShader(const ShaderDesc& desc) override;
+    Ref<Pipeline> CreateGraphicsPipeline(const PipelineDesc& desc) override;
+    
+    Ref<CommandBuffer> CreateCommandBuffer() override;
+    void SubmitCommandBuffer(Ref<CommandBuffer> commandBuffer) override;
+    
+    void WaitIdle() override;
+    
+    Ref<SwapChain> GetSwapChain() override { return m_SwapChain; }
+    
+    // Vulkan-specific
+    VulkanContext& GetContext() { return m_Context; }
+    uint32 FindMemoryType(uint32 typeFilter, VkMemoryPropertyFlags properties);
+
+private:
+    void CreateInstance(SDL_Window* window);
+    void PickPhysicalDevice();
+    void CreateLogicalDevice();
+    void CreateCommandPool();
+
+    VulkanContext m_Context;
+    DeviceInfo m_DeviceInfo;
+    
+    VkCommandPool m_CommandPool = VK_NULL_HANDLE;
+    
+    Ref<SwapChain> m_SwapChain;
+    SDL_Window* m_Window = nullptr;
+};
+
+} // namespace rhi
+} // namespace pbr
+
+// ============================================================================
+// include/pbr/rhi/vulkan/VulkanSwapChain.h
+// ============================================================================
+#pragma once
+
+#include "pbr/rhi/SwapChain.h"
+#include "VulkanTypes.h"
+
+namespace pbr {
+namespace rhi {
+
+class VulkanSwapChain : public SwapChain {
+public:
+    VulkanSwapChain(VulkanContext& context, SDL_Window* window);
+    ~VulkanSwapChain() override;
+
+    void Present() override;
+    void Resize(uint32 width, uint32 height) override;
+    
+    Ref<Texture> GetCurrentBackBuffer() override;
+    uint32 GetWidth() const override { return m_Width; }
+    uint32 GetHeight() const override { return m_Height; }
+    Format GetFormat() const override { return m_Format; }
+    
+    // Vulkan-specific
+    VkSwapchainKHR GetHandle() const { return m_SwapChain; }
+    uint32 GetCurrentImageIndex() const { return m_CurrentImageIndex; }
+    VkSemaphore GetImageAvailableSemaphore() const { return m_ImageAvailableSemaphores[m_CurrentFrame]; }
+    VkSemaphore GetRenderFinishedSemaphore() const { return m_RenderFinishedSemaphores[m_CurrentFrame]; }
+    VkFence GetInFlightFence() const { return m_InFlightFences[m_CurrentFrame]; }
+
+private:
+    void CreateSwapChain();
+    void CreateImageViews();
+    void CreateSyncObjects();
+    void Cleanup();
+
+    VulkanContext& m_Context;
+    SDL_Window* m_Window;
+    
+    VkSwapchainKHR m_SwapChain = VK_NULL_HANDLE;
+    std::vector<VkImage> m_Images;
+    std::vector<VkImageView> m_ImageViews;
+    std::vector<Ref<Texture>> m_Textures;
+    
+    uint32 m_Width = 0;
+    uint32 m_Height = 0;
+    Format m_Format = Format::Undefined;
+    VkFormat m_VkFormat = VK_FORMAT_UNDEFINED;
+    
+    // Synchronization
+    static constexpr uint32 MAX_FRAMES_IN_FLIGHT = 2;
+    std::vector<VkSemaphore> m_ImageAvailableSemaphores;
+    std::vector<VkSemaphore> m_RenderFinishedSemaphores;
+    std::vector<VkFence> m_InFlightFences;
+    uint32 m_CurrentFrame = 0;
+    uint32 m_CurrentImageIndex = 0;
+};
+
+} // namespace rhi
+} // namespace pbr
+
+// ============================================================================
+// include/pbr/rhi/vulkan/VulkanBuffer.h
+// ============================================================================
+#pragma once
+
+#include "pbr/rhi/Buffer.h"
+#include "VulkanTypes.h"
+
+namespace pbr {
+namespace rhi {
+
+class VulkanBuffer : public Buffer {
+public:
+    VulkanBuffer(VulkanContext& context, const BufferDesc& desc);
+    ~VulkanBuffer() override;
+
+    void* Map() override;
+    void Unmap() override;
+    void CopyData(const void* data, uint64 size, uint64 offset = 0) override;
+    
+    uint64 GetSize() const override { return m_Size; }
+    BufferUsage GetUsage() const override { return m_Usage; }
+    
+    // Vulkan-specific
+    VkBuffer GetHandle() const { return m_Buffer; }
+
+private:
+    VulkanContext& m_Context;
+    VkBuffer m_Buffer = VK_NULL_HANDLE;
+    VkDeviceMemory m_Memory = VK_NULL_HANDLE;
+    
+    uint64 m_Size = 0;
+    BufferUsage m_Usage;
+    MemoryUsage m_MemoryUsage;
+    
+    void* m_MappedData = nullptr;
+};
+
+} // namespace rhi
+} // namespace pbr
+
+// ============================================================================
+// include/pbr/rhi/vulkan/VulkanTexture.h
+// ============================================================================
+#pragma once
+
+#include "pbr/rhi/Texture.h"
+#include "VulkanTypes.h"
+
+namespace pbr {
+namespace rhi {
+
+class VulkanTexture : public Texture {
+public:
+    // For swap chain images (don't own the image)
+    VulkanTexture(VulkanContext& context, VkImage image, VkImageView imageView, 
+                  uint32 width, uint32 height, VkFormat format);
+    
+    // For created textures (own the image)
+    VulkanTexture(VulkanContext& context, const TextureDesc& desc);
+    
+    ~VulkanTexture() override;
+
+    uint32 GetWidth() const override { return m_Width; }
+    uint32 GetHeight() const override { return m_Height; }
+    Format GetFormat() const override { return m_Format; }
+    
+    // Vulkan-specific
+    VkImage GetImage() const { return m_Image; }
+    VkImageView GetImageView() const { return m_ImageView; }
+
+private:
+    VulkanContext& m_Context;
+    VkImage m_Image = VK_NULL_HANDLE;
+    VkImageView m_ImageView = VK_NULL_HANDLE;
+    VkDeviceMemory m_Memory = VK_NULL_HANDLE;
+    
+    uint32 m_Width = 0;
+    uint32 m_Height = 0;
+    Format m_Format = Format::Undefined;
+    VkFormat m_VkFormat = VK_FORMAT_UNDEFINED;
+    
+    bool m_OwnsImage = true;
+};
+
+} // namespace rhi
+} // namespace pbr
+
+// ============================================================================
+// include/pbr/rhi/vulkan/VulkanShader.h
+// ============================================================================
+#pragma once
+
+#include "pbr/rhi/Shader.h"
+#include "VulkanTypes.h"
+
+namespace pbr {
+namespace rhi {
+
+class VulkanShader : public Shader {
+public:
+    VulkanShader(VulkanContext& context, const ShaderDesc& desc);
+    ~VulkanShader() override;
+
+    ShaderStage GetStage() const override { return m_Stage; }
+    
+    // Vulkan-specific
+    VkShaderModule GetModule() const { return m_Module; }
+    const std::string& GetEntryPoint() const { return m_EntryPoint; }
+
+private:
+    VulkanContext& m_Context;
+    VkShaderModule m_Module = VK_NULL_HANDLE;
+    ShaderStage m_Stage;
+    std::string m_EntryPoint;
+};
+
+} // namespace rhi
+} // namespace pbr
+
+// ============================================================================
+// include/pbr/rhi/vulkan/VulkanPipeline.h
+// ============================================================================
+#pragma once
+
+#include "pbr/rhi/Pipeline.h"
+#include "VulkanTypes.h"
+
+namespace pbr {
+namespace rhi {
+
+class VulkanPipeline : public Pipeline {
+public:
+    VulkanPipeline(VulkanContext& context, const PipelineDesc& desc, 
+                   VkRenderPass renderPass);
+    ~VulkanPipeline() override;
+
+    // Vulkan-specific
+    VkPipeline GetHandle() const { return m_Pipeline; }
+    VkPipelineLayout GetLayout() const { return m_Layout; }
+
+private:
+    VulkanContext& m_Context;
+    VkPipeline m_Pipeline = VK_NULL_HANDLE;
+    VkPipelineLayout m_Layout = VK_NULL_HANDLE;
+};
+
+} // namespace rhi
+} // namespace pbr
+
+// ============================================================================
+// include/pbr/rhi/vulkan/VulkanCommandBuffer.h
+// ============================================================================
+#pragma once
+
+#include "pbr/rhi/CommandBuffer.h"
+#include "VulkanTypes.h"
+
+namespace pbr {
+namespace rhi {
+
+class VulkanCommandBuffer : public CommandBuffer {
+public:
+    VulkanCommandBuffer(VulkanContext& context, VkCommandPool commandPool);
+    ~VulkanCommandBuffer() override;
+
+    void Begin() override;
+    void End() override;
+    
+    void BeginRendering(const std::vector<Ref<Texture>>& colorAttachments,
+                       Ref<Texture> depthAttachment,
+                       const std::vector<ClearValue>& clearValues) override;
+    void EndRendering() override;
+    
+    void BindPipeline(Ref<Pipeline> pipeline) override;
+    void SetViewport(const Viewport& viewport) override;
+    void SetScissor(const Rect2D& scissor) override;
+    
+    void BindVertexBuffer(Ref<Buffer> buffer, uint64 offset = 0) override;
+    void BindIndexBuffer(Ref<Buffer> buffer, uint64 offset = 0) override;
+    
+    void Draw(uint32 vertexCount, uint32 instanceCount = 1,
+             uint32 firstVertex = 0, uint32 firstInstance = 0) override;
+    void DrawIndexed(uint32 indexCount, uint32 instanceCount = 1,
+                    uint32 firstIndex = 0, int32 vertexOffset = 0,
+                    uint32 firstInstance = 0) override;
+    
+    void CopyBuffer(Ref<Buffer> src, Ref<Buffer> dst,
+                   uint64 size, uint64 srcOffset = 0, uint64 dstOffset = 0) override;
+    
+    // Vulkan-specific
+    VkCommandBuffer GetHandle() const { return m_CommandBuffer; }
+
+private:
+    VulkanContext& m_Context;
+    VkCommandPool m_CommandPool;
+    VkCommandBuffer m_CommandBuffer = VK_NULL_HANDLE;
+    VkRenderPass m_CurrentRenderPass = VK_NULL_HANDLE;
+    VkFramebuffer m_CurrentFramebuffer = VK_NULL_HANDLE;
+    bool m_IsRecording = false;
+};
+
+} // namespace rhi
+} // namespace pbr

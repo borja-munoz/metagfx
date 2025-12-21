@@ -1,0 +1,712 @@
+# ============================================================================
+# Root CMakeLists.txt
+# ============================================================================
+cmake_minimum_required(VERSION 3.20)
+project(PhysicallyBasedRenderer VERSION 0.1.0 LANGUAGES CXX)
+
+# C++ Standard
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
+# Build options
+option(METAGFX_BUILD_TESTS "Build tests" OFF)
+option(METAGFX_USE_VULKAN "Enable Vulkan support" ON)
+option(METAGFX_USE_D3D12 "Enable Direct3D 12 support" OFF)
+option(METAGFX_USE_METAL "Enable Metal support" OFF)
+option(METAGFX_USE_WEBGPU "Enable WebGPU support" OFF)
+
+# Platform detection
+if(WIN32)
+    set(METAGFX_PLATFORM_WINDOWS TRUE)
+elseif(APPLE)
+    set(METAGFX_PLATFORM_MACOS TRUE)
+elseif(UNIX)
+    set(METAGFX_PLATFORM_LINUX TRUE)
+endif()
+
+# Output directories
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
+set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
+set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
+
+# Compiler warnings
+if(MSVC)
+    add_compile_options(/W4 /WX-)
+else()
+    add_compile_options(-Wall -Wextra -pedantic)
+endif()
+
+# External dependencies
+add_subdirectory(external)
+
+# Project modules
+add_subdirectory(src/core)
+add_subdirectory(src/rhi)
+add_subdirectory(src/scene)
+add_subdirectory(src/renderer)
+add_subdirectory(src/app)
+
+# Tests
+if(PBR_BUILD_TESTS)
+    enable_testing()
+    add_subdirectory(tests)
+endif()
+
+# ============================================================================
+# external/CMakeLists.txt
+# ============================================================================
+# SDL3
+set(SDL_SHARED ON CACHE BOOL "" FORCE)
+set(SDL_STATIC OFF CACHE BOOL "" FORCE)
+add_subdirectory(SDL EXCLUDE_FROM_ALL)
+
+# GLM (header-only)
+add_library(glm INTERFACE)
+target_include_directories(glm INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/glm)
+
+# stb (header-only)
+add_library(stb INTERFACE)
+target_include_directories(stb INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/stb)
+
+# ============================================================================
+# src/core/CMakeLists.txt
+# ============================================================================
+set(CORE_SOURCES
+    Logger.cpp
+    Platform.cpp
+)
+
+set(CORE_HEADERS
+    ${CMAKE_SOURCE_DIR}/include/metagfx/core/Logger.h
+    ${CMAKE_SOURCE_DIR}/include/metagfx/core/Platform.h
+    ${CMAKE_SOURCE_DIR}/include/metagfx/core/Types.h
+)
+
+add_library(metagfx_core STATIC ${CORE_SOURCES} ${CORE_HEADERS})
+
+target_include_directories(metagfx_core
+    PUBLIC
+        ${CMAKE_SOURCE_DIR}/include
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+target_link_libraries(metagfx_core
+    PUBLIC
+        glm
+)
+
+# ============================================================================
+# src/rhi/CMakeLists.txt
+# ============================================================================
+set(RHI_SOURCES
+    GraphicsDevice.cpp
+)
+
+set(RHI_HEADERS
+    ${CMAKE_SOURCE_DIR}/include/metagfx/rhi/GraphicsDevice.h
+    ${CMAKE_SOURCE_DIR}/include/metagfx/rhi/Types.h
+)
+
+# Vulkan-specific sources
+if(METAGFX_USE_VULKAN)
+    list(APPEND RHI_SOURCES vulkan/VulkanDevice.cpp)
+    list(APPEND RHI_HEADERS ${CMAKE_SOURCE_DIR}/include/metagfx/rhi/vulkan/VulkanDevice.h)
+endif()
+
+add_library(metagfx_rhi STATIC ${RHI_SOURCES} ${RHI_HEADERS})
+
+target_include_directories(metagfx_rhi
+    PUBLIC
+        ${CMAKE_SOURCE_DIR}/include
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+target_link_libraries(pbr_rhi
+    PUBLIC
+        pbr_core
+)
+
+# Vulkan
+if(PBR_USE_VULKAN)
+    find_package(Vulkan REQUIRED)
+    target_link_libraries(pbr_rhi PUBLIC Vulkan::Vulkan)
+    target_compile_definitions(pbr_rhi PUBLIC PBR_USE_VULKAN)
+endif()
+
+# ============================================================================
+# src/scene/CMakeLists.txt
+# ============================================================================
+set(SCENE_SOURCES
+    Scene.cpp
+)
+
+set(SCENE_HEADERS
+    ${CMAKE_SOURCE_DIR}/include/pbr/scene/Scene.h
+)
+
+add_library(pbr_scene STATIC ${SCENE_SOURCES} ${SCENE_HEADERS})
+
+target_include_directories(pbr_scene
+    PUBLIC
+        ${CMAKE_SOURCE_DIR}/include
+)
+
+target_link_libraries(pbr_scene
+    PUBLIC
+        pbr_core
+)
+
+# ============================================================================
+# src/renderer/CMakeLists.txt
+# ============================================================================
+set(RENDERER_SOURCES
+    Renderer.cpp
+)
+
+set(RENDERER_HEADERS
+    ${CMAKE_SOURCE_DIR}/include/pbr/renderer/Renderer.h
+)
+
+add_library(pbr_renderer STATIC ${RENDERER_SOURCES} ${RENDERER_HEADERS})
+
+target_include_directories(pbr_renderer
+    PUBLIC
+        ${CMAKE_SOURCE_DIR}/include
+)
+
+target_link_libraries(pbr_renderer
+    PUBLIC
+        pbr_core
+        pbr_rhi
+        pbr_scene
+)
+
+# ============================================================================
+# src/app/CMakeLists.txt
+# ============================================================================
+set(APP_SOURCES
+    main.cpp
+    Application.cpp
+)
+
+set(APP_HEADERS
+    Application.h
+)
+
+add_executable(pbr_app ${APP_SOURCES} ${APP_HEADERS})
+
+target_include_directories(pbr_app
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+target_link_libraries(pbr_app
+    PRIVATE
+        pbr_core
+        pbr_rhi
+        pbr_renderer
+        SDL3::SDL3
+)
+
+# Copy SDL3 DLL on Windows
+if(WIN32)
+    add_custom_command(TARGET pbr_app POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        $<TARGET_FILE:SDL3::SDL3>
+        $<TARGET_FILE_DIR:pbr_app>
+    )
+endif()
+
+set_target_properties(pbr_app PROPERTIES OUTPUT_NAME "PBRenderer")
+
+// ============================================================================
+// include/pbr/core/Types.h
+// ============================================================================
+#pragma once
+
+#include <cstdint>
+#include <memory>
+#include <string>
+
+namespace pbr {
+
+// Basic types
+using uint8 = uint8_t;
+using uint16 = uint16_t;
+using uint32 = uint32_t;
+using uint64 = uint64_t;
+
+using int8 = int8_t;
+using int16 = int16_t;
+using int32 = int32_t;
+using int64 = int64_t;
+
+// Smart pointer aliases
+template<typename T>
+using Ref = std::shared_ptr<T>;
+
+template<typename T>
+using Scope = std::unique_ptr<T>;
+
+template<typename T, typename... Args>
+Ref<T> CreateRef(Args&&... args) {
+    return std::make_shared<T>(std::forward<Args>(args)...);
+}
+
+template<typename T, typename... Args>
+Scope<T> CreateScope(Args&&... args) {
+    return std::make_unique<T>(std::forward<Args>(args)...);
+}
+
+} // namespace pbr
+
+// ============================================================================
+// include/pbr/core/Logger.h
+// ============================================================================
+#pragma once
+
+#include <spdlog/spdlog.h>
+#include <memory>
+
+namespace pbr {
+
+class Logger {
+public:
+    static void Init();
+    
+    static std::shared_ptr<spdlog::logger>& GetLogger() { return s_Logger; }
+
+private:
+    static std::shared_ptr<spdlog::logger> s_Logger;
+};
+
+} // namespace pbr
+
+// Logging macros
+#define PBR_TRACE(...)    ::pbr::Logger::GetLogger()->trace(__VA_ARGS__)
+#define PBR_DEBUG(...)    ::pbr::Logger::GetLogger()->debug(__VA_ARGS__)
+#define PBR_INFO(...)     ::pbr::Logger::GetLogger()->info(__VA_ARGS__)
+#define PBR_WARN(...)     ::pbr::Logger::GetLogger()->warn(__VA_ARGS__)
+#define PBR_ERROR(...)    ::pbr::Logger::GetLogger()->error(__VA_ARGS__)
+#define PBR_CRITICAL(...) ::pbr::Logger::GetLogger()->critical(__VA_ARGS__)
+
+// ============================================================================
+// src/core/Logger.cpp
+// ============================================================================
+#include "pbr/core/Logger.h"
+#include <spdlog/sinks/stdout_color_sinks.h>
+
+namespace pbr {
+
+std::shared_ptr<spdlog::logger> Logger::s_Logger;
+
+void Logger::Init() {
+    spdlog::set_pattern("%^[%T] %n: %v%$");
+    s_Logger = spdlog::stdout_color_mt("PBR");
+    s_Logger->set_level(spdlog::level::trace);
+    
+    PBR_INFO("Logger initialized");
+}
+
+} // namespace pbr
+
+// ============================================================================
+// include/pbr/core/Platform.h
+// ============================================================================
+#pragma once
+
+namespace pbr {
+
+enum class Platform {
+    Windows,
+    macOS,
+    Linux,
+    Unknown
+};
+
+class PlatformUtils {
+public:
+    static Platform GetPlatform();
+    static const char* GetPlatformName();
+};
+
+} // namespace pbr
+
+// ============================================================================
+// src/core/Platform.cpp
+// ============================================================================
+#include "pbr/core/Platform.h"
+
+namespace pbr {
+
+Platform PlatformUtils::GetPlatform() {
+#if defined(_WIN32) || defined(_WIN64)
+    return Platform::Windows;
+#elif defined(__APPLE__)
+    return Platform::macOS;
+#elif defined(__linux__)
+    return Platform::Linux;
+#else
+    return Platform::Unknown;
+#endif
+}
+
+const char* PlatformUtils::GetPlatformName() {
+    switch (GetPlatform()) {
+        case Platform::Windows: return "Windows";
+        case Platform::macOS:   return "macOS";
+        case Platform::Linux:   return "Linux";
+        default:                return "Unknown";
+    }
+}
+
+} // namespace pbr
+
+// ============================================================================
+// src/app/Application.h
+// ============================================================================
+#pragma once
+
+#include "pbr/core/Types.h"
+#include <SDL3/SDL.h>
+#include <string>
+
+namespace pbr {
+
+struct ApplicationConfig {
+    std::string title = "PBR Renderer";
+    uint32 width = 1280;
+    uint32 height = 720;
+    bool vsync = true;
+};
+
+class Application {
+public:
+    Application(const ApplicationConfig& config);
+    ~Application();
+
+    void Run();
+    void Shutdown();
+
+private:
+    void Init();
+    void ProcessEvents();
+    void Update(float deltaTime);
+    void Render();
+
+    ApplicationConfig m_Config;
+    SDL_Window* m_Window = nullptr;
+    bool m_Running = false;
+};
+
+} // namespace pbr
+
+// ============================================================================
+// src/app/Application.cpp
+// ============================================================================
+#include "Application.h"
+#include "pbr/core/Logger.h"
+#include <SDL3/SDL_vulkan.h>
+
+namespace pbr {
+
+Application::Application(const ApplicationConfig& config)
+    : m_Config(config) {
+    Init();
+}
+
+Application::~Application() {
+    Shutdown();
+}
+
+void Application::Init() {
+    PBR_INFO("Initializing application...");
+    
+    // Initialize SDL
+    if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS)) {
+        PBR_CRITICAL("Failed to initialize SDL: {}", SDL_GetError());
+        return;
+    }
+    
+    PBR_INFO("SDL initialized successfully");
+    
+    // Create window
+    uint32_t windowFlags = SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE;
+    
+    m_Window = SDL_CreateWindow(
+        m_Config.title.c_str(),
+        m_Config.width,
+        m_Config.height,
+        windowFlags
+    );
+    
+    if (!m_Window) {
+        PBR_CRITICAL("Failed to create window: {}", SDL_GetError());
+        SDL_Quit();
+        return;
+    }
+    
+    PBR_INFO("Window created: {}x{}", m_Config.width, m_Config.height);
+    
+    m_Running = true;
+}
+
+void Application::Run() {
+    PBR_INFO("Starting main loop...");
+    
+    uint64_t lastTime = SDL_GetTicksNS();
+    
+    while (m_Running) {
+        // Calculate delta time
+        uint64_t currentTime = SDL_GetTicksNS();
+        float deltaTime = (currentTime - lastTime) / 1000000000.0f;
+        lastTime = currentTime;
+        
+        ProcessEvents();
+        Update(deltaTime);
+        Render();
+    }
+    
+    PBR_INFO("Main loop ended");
+}
+
+void Application::ProcessEvents() {
+    SDL_Event event;
+    while (SDL_PollEvent(&event)) {
+        switch (event.type) {
+            case SDL_EVENT_QUIT:
+                PBR_INFO("Quit event received");
+                m_Running = false;
+                break;
+                
+            case SDL_EVENT_KEY_DOWN:
+                if (event.key.key == SDLK_ESCAPE) {
+                    PBR_INFO("Escape key pressed");
+                    m_Running = false;
+                }
+                break;
+                
+            case SDL_EVENT_WINDOW_RESIZED:
+                PBR_INFO("Window resized: {}x{}", 
+                    event.window.data1, event.window.data2);
+                break;
+        }
+    }
+}
+
+void Application::Update(float deltaTime) {
+    // TODO: Update logic will go here
+    (void)deltaTime; // Suppress unused warning for now
+}
+
+void Application::Render() {
+    // TODO: Rendering will go here
+    // For now, just a simple delay to avoid consuming 100% CPU
+    SDL_Delay(1);
+}
+
+void Application::Shutdown() {
+    if (m_Window) {
+        PBR_INFO("Destroying window...");
+        SDL_DestroyWindow(m_Window);
+        m_Window = nullptr;
+    }
+    
+    PBR_INFO("Shutting down SDL...");
+    SDL_Quit();
+}
+
+} // namespace pbr
+
+// ============================================================================
+// src/app/main.cpp
+// ============================================================================
+#include "Application.h"
+#include "pbr/core/Logger.h"
+#include "pbr/core/Platform.h"
+
+int main(int argc, char* argv[]) {
+    (void)argc;
+    (void)argv;
+    
+    // Initialize logger
+    pbr::Logger::Init();
+    
+    PBR_INFO("===========================================");
+    PBR_INFO("  Physically Based Renderer");
+    PBR_INFO("  Version: 0.1.0");
+    PBR_INFO("  Platform: {}", pbr::PlatformUtils::GetPlatformName());
+    PBR_INFO("===========================================");
+    
+    // Create and run application
+    {
+        pbr::ApplicationConfig config;
+        config.title = "PBR Renderer - Milestone 1.1";
+        config.width = 1280;
+        config.height = 720;
+        config.vsync = true;
+        
+        pbr::Application app(config);
+        app.Run();
+    }
+    
+    PBR_INFO("Application terminated successfully");
+    
+    return 0;
+}
+
+// ============================================================================
+// include/pbr/rhi/Types.h (Placeholder)
+// ============================================================================
+#pragma once
+
+namespace pbr {
+namespace rhi {
+
+// RHI types will be defined here in Milestone 1.2
+
+} // namespace rhi
+} // namespace pbr
+
+// ============================================================================
+// include/pbr/rhi/GraphicsDevice.h (Placeholder)
+// ============================================================================
+#pragma once
+
+#include "pbr/core/Types.h"
+
+namespace pbr {
+namespace rhi {
+
+class GraphicsDevice {
+public:
+    GraphicsDevice() = default;
+    virtual ~GraphicsDevice() = default;
+    
+    // Interface will be defined in Milestone 1.2
+};
+
+} // namespace rhi
+} // namespace pbr
+
+// ============================================================================
+// src/rhi/GraphicsDevice.cpp (Placeholder)
+// ============================================================================
+#include "pbr/rhi/GraphicsDevice.h"
+
+namespace pbr {
+namespace rhi {
+
+// Implementation will come in Milestone 1.2
+
+} // namespace rhi
+} // namespace pbr
+
+// ============================================================================
+// include/pbr/scene/Scene.h (Placeholder)
+// ============================================================================
+#pragma once
+
+#include "pbr/core/Types.h"
+
+namespace pbr {
+
+class Scene {
+public:
+    Scene() = default;
+    ~Scene() = default;
+    
+    // Scene functionality will be added in Phase 2
+};
+
+} // namespace pbr
+
+// ============================================================================
+// src/scene/Scene.cpp (Placeholder)
+// ============================================================================
+#include "pbr/scene/Scene.h"
+
+namespace pbr {
+
+// Implementation will come in Phase 2
+
+} // namespace pbr
+
+// ============================================================================
+// include/pbr/renderer/Renderer.h (Placeholder)
+// ============================================================================
+#pragma once
+
+#include "pbr/core/Types.h"
+
+namespace pbr {
+
+class Renderer {
+public:
+    Renderer() = default;
+    ~Renderer() = default;
+    
+    // Renderer functionality will be added progressively
+};
+
+} // namespace pbr
+
+// ============================================================================
+// src/renderer/Renderer.cpp (Placeholder)
+// ============================================================================
+#include "pbr/renderer/Renderer.h"
+
+namespace pbr {
+
+// Implementation will come progressively through the milestones
+
+} // namespace pbr
+
+// ============================================================================
+// .gitignore
+// ============================================================================
+# Build directories
+build/
+out/
+cmake-build-*/
+
+# IDE files
+.vs/
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Compiled files
+*.o
+*.obj
+*.a
+*.lib
+*.dll
+*.so
+*.dylib
+*.exe
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Assets (large files)
+assets/*.exr
+assets/*.hdr
+assets/models/*.obj
+assets/models/*.fbx
+
+# ============================================================================
+// README.md - Build Instructions
+// ============================================================================
