@@ -22,39 +22,26 @@ metagfx/
 ├── claude/
 │   ├── milestone_x_y/          
 │   │   ├── milestone_x_y.md     (instructions)
-│   │   ├── milestone_x_y.txt.   (code)
+│   │   ├── milestone_x_y.txt    (code)
 ├── external/
 │   ├── CMakeLists.txt
-│   ├── SDL/          (clone SDL3 here)
-│   ├── glm/          (clone GLM here)
-│   └── stb/          (download stb_image.h here)
+│   ├── SDL/          (repo added as submodule)
+│   ├── glm/          (repo added as submodule)
+│   └── stb/          
 ├── include/
 │   └── metagfx/
 │       ├── core/
-│       │   ├── Logger.h
-│       │   ├── Platform.h
-│       │   └── Types.h
 │       ├── rhi/
-│       │   ├── GraphicsDevice.h
-│       │   └── Types.h
+│       │   └── vulkan/
 │       ├── scene/
-│       │   └── Scene.h
 │       └── renderer/
-│           └── Renderer.h
 └── src/
+    ├── app/
     ├── core/
-    │   ├── Logger.cpp
-    │   └── Platform.cpp
     ├── rhi/
-    │   └── GraphicsDevice.cpp
+    │   └── vulkan
     ├── scene/
-    │   └── Scene.cpp
-    ├── renderer/
-    │   └── Renderer.cpp
-    └── app/
-        ├── Application.h
-        ├── Application.cpp
-        └── main.cpp
+    └── renderer/
 ```
 
 ---
@@ -199,16 +186,16 @@ cd build/bin
 ./metagfx
 ```
 
----
+### Controls
 
-## Expected Behavior 
+Once implemented:
 
-When you run the application, you should see:
-- A console window with log output showing initialization steps
-- A window titled "MetaGFX" (1280x720) with a triangle with interpolated colors
-- The window can be resized
-- Press ESC or close the window to exit
-- Clean shutdown with log messages
+- **ESC**: Exit application
+- **C**: Toggle camera control mode
+- **W/A/S/D**: Move forward/left/back/right
+- **Q/E**: Move down/up
+- **Mouse Movement**: Look around (when camera enabled)
+- **Mouse Wheel**: Zoom in/out (FOV adjustment)
 
 ---
 
@@ -221,27 +208,6 @@ cmake .. -DMETAGFX_USE_METAL=ON       # Enable Metal support (default: OFF)
 cmake .. -DMETAGFX_USE_WEBGPU=ON      # Enable WebGPU support (default: OFF)
 cmake .. -DMETAGFX_BUILD_TESTS=ON     # Build tests (default: OFF)
 ```
-
----
-
-## Troubleshooting
-
-### SDL3 not found
-Make sure SDL3 is properly cloned in the `external/SDL` directory.
-
-### Vulkan SDK not found (Windows)
-Install the Vulkan SDK from https://vulkan.lunarg.com/ and ensure the `VULKAN_SDK` environment variable is set.
-
-### Vulkan headers not found (Linux)
-```bash
-sudo apt install libvulkan-dev vulkan-tools
-```
-
-### Compiler not found
-Ensure your compiler is in PATH and CMake can detect it.
-
-### Link errors with SDL3
-SDL3 might require additional system libraries. Check CMake output for missing dependencies.
 
 ---
 
