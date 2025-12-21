@@ -27,6 +27,7 @@ if(METAGFX_USE_VULKAN)
         vulkan/VulkanShader.cpp
         vulkan/VulkanPipeline.cpp
         vulkan/VulkanCommandBuffer.cpp
+        vulkan/VulkanDescriptorSet.cpp
     )
     list(APPEND RHI_HEADERS
         ${CMAKE_SOURCE_DIR}/include/metagfx/rhi/vulkan/VulkanTypes.h
@@ -37,6 +38,7 @@ if(METAGFX_USE_VULKAN)
         ${CMAKE_SOURCE_DIR}/include/metagfx/rhi/vulkan/VulkanShader.h
         ${CMAKE_SOURCE_DIR}/include/metagfx/rhi/vulkan/VulkanPipeline.h
         ${CMAKE_SOURCE_DIR}/include/metagfx/rhi/vulkan/VulkanCommandBuffer.h
+        ${CMAKE_SOURCE_DIR}/include/metagfx/rhi/vulkan/VulkanDescriptorSet.h
     )
 endif()
 

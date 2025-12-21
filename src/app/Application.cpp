@@ -1,19 +1,22 @@
 // ============================================================================
 // src/app/Application.cpp
 // ============================================================================
-#include "metagfx/core/Logger.h"
 #include "Application.h"
-#include "metagfx/rhi/GraphicsDevice.h"
 #include "metagfx/core/Logger.h"
-#include "Application.h"
-#include "metagfx/rhi/GraphicsDevice.h"
 #include "metagfx/rhi/Buffer.h"
-#include "metagfx/rhi/Shader.h"
-#include "metagfx/rhi/Pipeline.h"
 #include "metagfx/rhi/CommandBuffer.h"
+#include "metagfx/rhi/GraphicsDevice.h"
+#include "metagfx/rhi/Pipeline.h"
+#include "metagfx/rhi/Shader.h"
 #include "metagfx/rhi/SwapChain.h"
 #include "metagfx/rhi/Texture.h"
+#include "metagfx/rhi/vulkan/VulkanCommandBuffer.h"
+#include "metagfx/rhi/vulkan/VulkanDevice.h"
+#include "metagfx/rhi/vulkan/VulkanDescriptorSet.h"
+#include "metagfx/rhi/vulkan/VulkanPipeline.h"
+#include "metagfx/scene/Camera.h"
 #include <SDL3/SDL.h>
+#include <glm/glm.hpp>
 
 namespace metagfx {
 
@@ -68,7 +71,46 @@ void Application::Init() {
         return;
     }
 #endif
+
+    // Create camera
+    m_Camera = std::make_unique<Camera>(
+        45.0f,
+        static_cast<float>(m_Config.width) / static_cast<float>(m_Config.height),
+        0.1f,
+        100.0f
+    );
+    m_Camera->SetPosition(glm::vec3(0.0f, 0.0f, 3.0f));
     
+    // Create uniform buffers (before creating pipeline)
+    using namespace rhi;
+    BufferDesc uniformBufferDesc{};
+    uniformBufferDesc.size = sizeof(UniformBufferObject);
+    uniformBufferDesc.usage = BufferUsage::Uniform;
+    uniformBufferDesc.memoryUsage = MemoryUsage::CPUToGPU;
+    
+    m_UniformBuffers[0] = m_Device->CreateBuffer(uniformBufferDesc);
+    m_UniformBuffers[1] = m_Device->CreateBuffer(uniformBufferDesc);
+    
+    // Create descriptor set
+    std::vector<rhi::DescriptorBinding> bindings = {
+        {
+            0,  // binding = 0
+            VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+            VK_SHADER_STAGE_VERTEX_BIT,
+            m_UniformBuffers[0]
+        }
+    };
+    
+    m_DescriptorSet = std::make_unique<rhi::VulkanDescriptorSet>(
+        std::static_pointer_cast<rhi::VulkanDevice>(m_Device)->GetContext(),
+        bindings
+    );
+    
+    // Set descriptor set layout on device before creating pipeline
+    std::static_pointer_cast<rhi::VulkanDevice>(m_Device)->SetDescriptorSetLayout(
+        m_DescriptorSet->GetLayout()
+    );
+
     // Create triangle resources
     CreateTriangle();
     
@@ -174,22 +216,74 @@ void Application::ProcessEvents() {
                     METAGFX_INFO << "Escape key pressed";
                     m_Running = false;
                 }
+                // Toggle camera control with C key
+                if (event.key.key == SDLK_C) {
+                    m_CameraEnabled = !m_CameraEnabled;
+                    SDL_SetWindowRelativeMouseMode(m_Window, m_CameraEnabled);
+                    METAGFX_INFO << "Camera control " << (m_CameraEnabled ? "enabled" : "disabled");
+                    m_FirstMouse = true;  // Reset mouse position
+                }
+                break;
+                
+            case SDL_EVENT_MOUSE_MOTION:
+                if (m_CameraEnabled) {
+                    if (m_FirstMouse) {
+                        m_LastX = static_cast<float>(event.motion.x);
+                        m_LastY = static_cast<float>(event.motion.y);
+                        m_FirstMouse = false;
+                    }
+                    
+                    float xoffset = static_cast<float>(event.motion.x) - m_LastX;
+                    float yoffset = m_LastY - static_cast<float>(event.motion.y);
+                    m_LastX = static_cast<float>(event.motion.x);
+                    m_LastY = static_cast<float>(event.motion.y);
+                    
+                    m_Camera->ProcessMouseMovement(xoffset, yoffset);
+                }
+                break;
+                
+            case SDL_EVENT_MOUSE_WHEEL:
+                if (m_CameraEnabled) {
+                    m_Camera->ProcessMouseScroll(static_cast<float>(event.wheel.y));
+                }
                 break;
                 
             case SDL_EVENT_WINDOW_RESIZED:
                 METAGFX_INFO << "Window resized: " << event.window.data1 << "x" << event.window.data2;
                 if (m_Device) {
                     m_Device->GetSwapChain()->Resize(event.window.data1, event.window.data2);
+                    m_Camera->SetAspectRatio(
+                        static_cast<float>(event.window.data1) / 
+                        static_cast<float>(event.window.data2)
+                    );
                 }
                 break;
         }
     }
 }
 
+// In Update():
 void Application::Update(float deltaTime) {
-    (void)deltaTime;
+    if (!m_CameraEnabled) return;
+    
+    // Process keyboard input for camera
+    const bool* keyState = SDL_GetKeyboardState(nullptr);
+    
+    if (keyState[SDL_SCANCODE_W])
+        m_Camera->ProcessKeyboard(SDLK_W, deltaTime);
+    if (keyState[SDL_SCANCODE_S])
+        m_Camera->ProcessKeyboard(SDLK_S, deltaTime);
+    if (keyState[SDL_SCANCODE_A])
+        m_Camera->ProcessKeyboard(SDLK_A, deltaTime);
+    if (keyState[SDL_SCANCODE_D])
+        m_Camera->ProcessKeyboard(SDLK_D, deltaTime);
+    if (keyState[SDL_SCANCODE_Q])
+        m_Camera->ProcessKeyboard(SDLK_Q, deltaTime);
+    if (keyState[SDL_SCANCODE_E])
+        m_Camera->ProcessKeyboard(SDLK_E, deltaTime);
 }
 
+// In Render():
 void Application::Render() {
     using namespace rhi;
     
@@ -198,8 +292,20 @@ void Application::Render() {
     auto swapChain = m_Device->GetSwapChain();
     auto backBuffer = swapChain->GetCurrentBackBuffer();
     
+    // Update uniform buffer
+    UniformBufferObject ubo{};
+    ubo.model = glm::rotate(glm::mat4(1.0f), 
+                           static_cast<float>(SDL_GetTicks()) / 1000.0f * glm::radians(90.0f),
+                           glm::vec3(0.0f, 0.0f, 1.0f));
+    ubo.view = m_Camera->GetViewMatrix();
+    ubo.projection = m_Camera->GetProjectionMatrix();
+    
+    m_UniformBuffers[m_CurrentFrame]->CopyData(&ubo, sizeof(ubo));
+    
     // Create command buffer
     auto cmd = m_Device->CreateCommandBuffer();
+    auto vkCmd = std::static_pointer_cast<VulkanCommandBuffer>(cmd);
+    
     cmd->Begin();
     
     // Begin rendering
@@ -224,8 +330,15 @@ void Application::Render() {
     scissor.height = swapChain->GetHeight();
     cmd->SetScissor(scissor);
     
-    // Draw triangle
+    // Bind pipeline
     cmd->BindPipeline(m_Pipeline);
+    
+    // Bind descriptor set
+    auto vkPipeline = std::static_pointer_cast<VulkanPipeline>(m_Pipeline);
+    vkCmd->BindDescriptorSet(vkPipeline->GetLayout(), 
+                             m_DescriptorSet->GetSet(m_CurrentFrame));
+    
+    // Draw triangle
     cmd->BindVertexBuffer(m_VertexBuffer);
     cmd->Draw(3);
     
@@ -235,6 +348,9 @@ void Application::Render() {
     // Submit and present
     m_Device->SubmitCommandBuffer(cmd);
     swapChain->Present();
+    
+    // Advance frame
+    m_CurrentFrame = (m_CurrentFrame + 1) % 2;
 }
 
 void Application::Shutdown() {

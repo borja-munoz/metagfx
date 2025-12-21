@@ -8,7 +8,8 @@
 namespace metagfx {
 namespace rhi {
 
-VulkanPipeline::VulkanPipeline(VulkanContext& context, const PipelineDesc& desc, VkRenderPass renderPass)
+VulkanPipeline::VulkanPipeline(VulkanContext& context, const PipelineDesc& desc, 
+                               VkRenderPass renderPass, VkDescriptorSetLayout descriptorSetLayout)
     : m_Context(context) {
     
     // Shader stages
@@ -115,7 +116,14 @@ VulkanPipeline::VulkanPipeline(VulkanContext& context, const PipelineDesc& desc,
     // Pipeline layout
     VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
     pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    pipelineLayoutInfo.setLayoutCount = 0;
+    
+    if (descriptorSetLayout != VK_NULL_HANDLE) {
+        pipelineLayoutInfo.setLayoutCount = 1;
+        pipelineLayoutInfo.pSetLayouts = &descriptorSetLayout;
+    } else {
+        pipelineLayoutInfo.setLayoutCount = 0;
+    }
+    
     pipelineLayoutInfo.pushConstantRangeCount = 0;
     
     VK_CHECK(vkCreatePipelineLayout(m_Context.device, &pipelineLayoutInfo, nullptr, &m_Layout));

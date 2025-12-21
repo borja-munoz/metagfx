@@ -12,7 +12,7 @@ namespace rhi {
 class VulkanPipeline : public Pipeline {
 public:
     VulkanPipeline(VulkanContext& context, const PipelineDesc& desc, 
-                   VkRenderPass renderPass);
+                   VkRenderPass renderPass, VkDescriptorSetLayout descriptorSetLayout);
     ~VulkanPipeline() override;
 
     // Vulkan-specific

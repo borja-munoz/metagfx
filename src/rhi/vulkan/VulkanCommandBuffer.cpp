@@ -184,5 +184,10 @@ void VulkanCommandBuffer::CopyBuffer(Ref<Buffer> src, Ref<Buffer> dst,
     vkCmdCopyBuffer(m_CommandBuffer, vkSrc->GetHandle(), vkDst->GetHandle(), 1, &copyRegion);
 }
 
+void VulkanCommandBuffer::BindDescriptorSet(VkPipelineLayout layout, VkDescriptorSet descriptorSet) {
+    vkCmdBindDescriptorSets(m_CommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                           layout, 0, 1, &descriptorSet, 0, nullptr);
+}
+
 } // namespace rhi
 } // namespace metagfx

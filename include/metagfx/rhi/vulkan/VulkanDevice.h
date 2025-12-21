@@ -34,6 +34,10 @@ public:
     VulkanContext& GetContext() { return m_Context; }
     uint32 FindMemoryType(uint32 typeFilter, VkMemoryPropertyFlags properties);
 
+    // Descriptor set layout management
+    void SetDescriptorSetLayout(VkDescriptorSetLayout layout) { m_DescriptorSetLayout = layout; }
+    VkDescriptorSetLayout GetDescriptorSetLayout() const { return m_DescriptorSetLayout; }
+
 private:
     void CreateInstance(SDL_Window* window);
     void PickPhysicalDevice();
@@ -47,6 +51,8 @@ private:
     
     Ref<SwapChain> m_SwapChain;
     SDL_Window* m_Window = nullptr;
+
+    VkDescriptorSetLayout m_DescriptorSetLayout = VK_NULL_HANDLE;
 };
 
 } // namespace rhi

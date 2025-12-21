@@ -206,7 +206,6 @@ Ref<Shader> VulkanDevice::CreateShader(const ShaderDesc& desc) {
 }
 
 Ref<Pipeline> VulkanDevice::CreateGraphicsPipeline(const PipelineDesc& desc) {
-    // For now, create a simple render pass for the swap chain format
     auto swapChain = std::static_pointer_cast<VulkanSwapChain>(m_SwapChain);
     
     VkAttachmentDescription colorAttachment{};
@@ -238,7 +237,9 @@ Ref<Pipeline> VulkanDevice::CreateGraphicsPipeline(const PipelineDesc& desc) {
     VkRenderPass renderPass;
     VK_CHECK(vkCreateRenderPass(m_Context.device, &renderPassInfo, nullptr, &renderPass));
     
-    return CreateRef<VulkanPipeline>(m_Context, desc, renderPass);
+    // Create pipeline with descriptor set layout
+    // Note: m_DescriptorSetLayout should be set by the application before creating the pipeline
+    return CreateRef<VulkanPipeline>(m_Context, desc, renderPass, m_DescriptorSetLayout);
 }
 
 Ref<CommandBuffer> VulkanDevice::CreateCommandBuffer() {

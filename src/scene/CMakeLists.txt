@@ -2,10 +2,12 @@
 # src/scene/CMakeLists.txt
 # ============================================================================
 set(SCENE_SOURCES
+    Camera.cpp
     Scene.cpp
 )
 
 set(SCENE_HEADERS
+    ${CMAKE_SOURCE_DIR}/include/metagfx/scene/Camera.h
     ${CMAKE_SOURCE_DIR}/include/metagfx/scene/Scene.h
 )
 
@@ -19,4 +21,6 @@ target_include_directories(metagfx_scene
 target_link_libraries(metagfx_scene
     PUBLIC
         metagfx_core
+        glm
+        SDL3::SDL3
 )

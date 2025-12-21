@@ -41,6 +41,9 @@ public:
     // Vulkan-specific
     VkCommandBuffer GetHandle() const { return m_CommandBuffer; }
 
+    // Bind descriptor set
+    void BindDescriptorSet(VkPipelineLayout layout, VkDescriptorSet descriptorSet);
+
 private:
     VulkanContext& m_Context;
     VkCommandPool m_CommandPool;
