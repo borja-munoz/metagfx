@@ -15,6 +15,7 @@
 #include "metagfx/rhi/vulkan/VulkanDescriptorSet.h"
 #include "metagfx/rhi/vulkan/VulkanPipeline.h"
 #include "metagfx/scene/Camera.h"
+#include "metagfx/scene/Mesh.h"
 #include <SDL3/SDL.h>
 #include <glm/glm.hpp>
 
@@ -80,6 +81,9 @@ void Application::Init() {
         100.0f
     );
     m_Camera->SetPosition(glm::vec3(0.0f, 0.0f, 3.0f));
+
+    // Enable relative mouse mode for camera by default
+    SDL_SetWindowRelativeMouseMode(m_Window, true);
     
     // Create uniform buffers (before creating pipeline)
     using namespace rhi;
@@ -113,7 +117,23 @@ void Application::Init() {
 
     // Create triangle resources
     CreateTriangle();
-    
+
+    // Create model pipeline
+    CreateModelPipeline();
+
+    // Load bunny model
+    m_Model = std::make_unique<Model>();
+    if (!m_Model->LoadFromFile(m_Device.get(), "../../assets/models/bunny.obj")) {
+        METAGFX_WARN << "Failed to load bunny.obj, falling back to procedural cube";
+        // Fallback to procedural cube if model loading fails
+        if (!m_Model->CreateCube(m_Device.get(), 1.0f)) {
+            METAGFX_ERROR << "Failed to create fallback cube model";
+            return;
+        }
+    }
+
+    METAGFX_INFO << "Model loaded successfully";
+    METAGFX_INFO << "Controls: WASD to move, QE for up/down, Mouse to look, C to toggle camera, ESC to exit";
     m_Running = true;
 }
 
@@ -181,6 +201,58 @@ void Application::CreateTriangle() {
     m_Pipeline = m_Device->CreateGraphicsPipeline(pipelineDesc);
     
     METAGFX_INFO << "Triangle resources created";
+}
+
+void Application::CreateModelPipeline() {
+    using namespace rhi;
+
+    // Load model shaders (SPIR-V bytecode)
+    std::vector<uint8> vertShaderCode = {
+        #include "model.vert.spv.inl"
+    };
+
+    ShaderDesc vertShaderDesc{};
+    vertShaderDesc.stage = ShaderStage::Vertex;
+    vertShaderDesc.code = vertShaderCode;
+    vertShaderDesc.entryPoint = "main";
+
+    auto vertShader = m_Device->CreateShader(vertShaderDesc);
+
+    std::vector<uint8> fragShaderCode = {
+        #include "model.frag.spv.inl"
+    };
+
+    ShaderDesc fragShaderDesc{};
+    fragShaderDesc.stage = ShaderStage::Fragment;
+    fragShaderDesc.code = fragShaderCode;
+    fragShaderDesc.entryPoint = "main";
+
+    auto fragShader = m_Device->CreateShader(fragShaderDesc);
+
+    // Create pipeline for models
+    PipelineDesc pipelineDesc{};
+    pipelineDesc.vertexShader = vertShader;
+    pipelineDesc.fragmentShader = fragShader;
+
+    // Vertex input: position (vec3), normal (vec3), texcoord (vec2)
+    pipelineDesc.vertexInput.stride = sizeof(Vertex);
+    pipelineDesc.vertexInput.attributes = {
+        { 0, Format::R32G32B32_SFLOAT, 0 },                          // position at location 0
+        { 1, Format::R32G32B32_SFLOAT, sizeof(float) * 3 },          // normal at location 1
+        { 2, Format::R32G32_SFLOAT, sizeof(float) * 6 }              // texcoord at location 2
+    };
+
+    pipelineDesc.topology = PrimitiveTopology::TriangleList;
+    pipelineDesc.rasterization.cullMode = CullMode::Back;
+    pipelineDesc.rasterization.frontFace = FrontFace::CounterClockwise;
+
+    // Enable depth testing (will be added later, for now just set defaults)
+    pipelineDesc.depthStencil.depthTestEnable = false;
+    pipelineDesc.depthStencil.depthWriteEnable = false;
+
+    m_ModelPipeline = m_Device->CreateGraphicsPipeline(pipelineDesc);
+
+    METAGFX_INFO << "Model pipeline created";
 }
 
 void Application::Run() {
@@ -294,12 +366,12 @@ void Application::Render() {
     
     // Update uniform buffer
     UniformBufferObject ubo{};
-    ubo.model = glm::rotate(glm::mat4(1.0f), 
-                           static_cast<float>(SDL_GetTicks()) / 1000.0f * glm::radians(90.0f),
-                           glm::vec3(0.0f, 0.0f, 1.0f));
+    ubo.model = glm::rotate(glm::mat4(1.0f),
+                           static_cast<float>(SDL_GetTicks()) / 1000.0f * glm::radians(45.0f),
+                           glm::vec3(0.0f, 1.0f, 0.0f));
     ubo.view = m_Camera->GetViewMatrix();
     ubo.projection = m_Camera->GetProjectionMatrix();
-    
+
     m_UniformBuffers[m_CurrentFrame]->CopyData(&ubo, sizeof(ubo));
     
     // Create command buffer
@@ -330,18 +402,26 @@ void Application::Render() {
     scissor.height = swapChain->GetHeight();
     cmd->SetScissor(scissor);
     
-    // Bind pipeline
-    cmd->BindPipeline(m_Pipeline);
-    
-    // Bind descriptor set
-    auto vkPipeline = std::static_pointer_cast<VulkanPipeline>(m_Pipeline);
-    vkCmd->BindDescriptorSet(vkPipeline->GetLayout(), 
-                             m_DescriptorSet->GetSet(m_CurrentFrame));
-    
-    // Draw triangle
-    cmd->BindVertexBuffer(m_VertexBuffer);
-    cmd->Draw(3);
-    
+    // Draw the model
+    if (m_Model && m_Model->IsValid()) {
+        // Bind model pipeline
+        cmd->BindPipeline(m_ModelPipeline);
+
+        // Bind descriptor set
+        auto vkPipeline = std::static_pointer_cast<VulkanPipeline>(m_ModelPipeline);
+        vkCmd->BindDescriptorSet(vkPipeline->GetLayout(),
+                                 m_DescriptorSet->GetSet(m_CurrentFrame));
+
+        // Draw all meshes in the model
+        for (const auto& mesh : m_Model->GetMeshes()) {
+            if (mesh && mesh->IsValid()) {
+                cmd->BindVertexBuffer(mesh->GetVertexBuffer());
+                cmd->BindIndexBuffer(mesh->GetIndexBuffer());
+                cmd->DrawIndexed(mesh->GetIndexCount());
+            }
+        }
+    }
+
     cmd->EndRendering();
     cmd->End();
     
@@ -357,9 +437,19 @@ void Application::Shutdown() {
     if (m_Device) {
         m_Device->WaitIdle();
     }
-    
+
+    // Clean up model
+    if (m_Model) {
+        m_Model->Cleanup();
+        m_Model.reset();
+    }
+
+    m_ModelPipeline.reset();
     m_Pipeline.reset();
     m_VertexBuffer.reset();
+    m_UniformBuffers[0].reset();
+    m_UniformBuffers[1].reset();
+    m_DescriptorSet.reset();
     m_Device.reset();
     
     if (m_Window) {

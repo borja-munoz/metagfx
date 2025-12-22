@@ -3,11 +3,15 @@
 # ============================================================================
 set(SCENE_SOURCES
     Camera.cpp
+    Mesh.cpp
+    Model.cpp
     Scene.cpp
 )
 
 set(SCENE_HEADERS
     ${CMAKE_SOURCE_DIR}/include/metagfx/scene/Camera.h
+    ${CMAKE_SOURCE_DIR}/include/metagfx/scene/Mesh.h
+    ${CMAKE_SOURCE_DIR}/include/metagfx/scene/Model.h
     ${CMAKE_SOURCE_DIR}/include/metagfx/scene/Scene.h
 )
 
@@ -23,4 +27,5 @@ target_link_libraries(metagfx_scene
         metagfx_core
         glm
         SDL3::SDL3
+        assimp
 )

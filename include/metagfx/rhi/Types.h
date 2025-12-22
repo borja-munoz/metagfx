@@ -253,11 +253,31 @@ struct VertexAttribute {
     uint32 location;
     Format format;
     uint32 offset;
+    uint32 binding;
 };
 
 struct VertexInputLayout {
     std::vector<VertexAttribute> attributes;
     uint32 stride;
+};
+
+// Vertex input rate (per-vertex or per-instance)
+enum class VertexInputRate {
+    Vertex,
+    Instance
+};
+
+// Vertex input binding description
+struct VertexInputBinding {
+    uint32_t binding = 0;
+    uint32_t stride = 0;
+    VertexInputRate inputRate = VertexInputRate::Vertex;
+};
+
+// Vertex input state for pipeline
+struct VertexInputState {
+    std::vector<VertexInputBinding> bindings;
+    std::vector<VertexAttribute> attributes;
 };
 
 struct RasterizationState {
@@ -292,6 +312,7 @@ struct PipelineDesc {
     DepthStencilState depthStencil;
     std::vector<ColorAttachmentState> colorAttachments;
     const char* debugName = nullptr;
+    VertexInputState vertexInputState;
 };
 
 struct Viewport {

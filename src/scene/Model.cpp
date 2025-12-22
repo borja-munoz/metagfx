@@ -1,0 +1,294 @@
+// ============================================================================
+// src/scene/Model.cpp
+// ============================================================================
+#include "metagfx/scene/Model.h"
+#include "metagfx/rhi/GraphicsDevice.h"
+#include "metagfx/rhi/Types.h"
+#include "metagfx/core/Logger.h"
+
+#include <assimp/Importer.hpp>
+#include <assimp/scene.h>
+#include <assimp/postprocess.h>
+
+#include <glm/gtc/constants.hpp>
+
+namespace metagfx {
+
+Model::Model() = default;
+
+Model::~Model() {
+    Cleanup();
+}
+
+Model::Model(Model&& other) noexcept
+    : m_Meshes(std::move(other.m_Meshes))
+    , m_FilePath(std::move(other.m_FilePath))
+{
+}
+
+Model& Model::operator=(Model&& other) noexcept {
+    if (this != &other) {
+        Cleanup();
+        m_Meshes = std::move(other.m_Meshes);
+        m_FilePath = std::move(other.m_FilePath);
+    }
+    return *this;
+}
+
+// Helper function to process an Assimp mesh
+static std::unique_ptr<Mesh> ProcessMesh(rhi::GraphicsDevice* device, aiMesh* aiMesh) {
+    std::vector<Vertex> vertices;
+    std::vector<uint32_t> indices;
+
+    // Process vertices
+    vertices.reserve(aiMesh->mNumVertices);
+    for (uint32_t i = 0; i < aiMesh->mNumVertices; ++i) {
+        Vertex vertex;
+
+        // Position
+        vertex.position = glm::vec3(
+            aiMesh->mVertices[i].x,
+            aiMesh->mVertices[i].y,
+            aiMesh->mVertices[i].z
+        );
+
+        // Normal
+        if (aiMesh->HasNormals()) {
+            vertex.normal = glm::vec3(
+                aiMesh->mNormals[i].x,
+                aiMesh->mNormals[i].y,
+                aiMesh->mNormals[i].z
+            );
+        } else {
+            vertex.normal = glm::vec3(0.0f, 1.0f, 0.0f);
+        }
+
+        // Texture coordinates (use first UV channel if available)
+        if (aiMesh->HasTextureCoords(0)) {
+            vertex.texCoord = glm::vec2(
+                aiMesh->mTextureCoords[0][i].x,
+                aiMesh->mTextureCoords[0][i].y
+            );
+        } else {
+            vertex.texCoord = glm::vec2(0.0f, 0.0f);
+        }
+
+        vertices.push_back(vertex);
+    }
+
+    // Process indices
+    for (uint32_t i = 0; i < aiMesh->mNumFaces; ++i) {
+        aiFace face = aiMesh->mFaces[i];
+        for (uint32_t j = 0; j < face.mNumIndices; ++j) {
+            indices.push_back(face.mIndices[j]);
+        }
+    }
+
+    // Create and initialize mesh
+    auto mesh = std::make_unique<Mesh>();
+    if (!mesh->Initialize(device, vertices, indices)) {
+        METAGFX_ERROR << "Failed to initialize mesh";
+        return nullptr;
+    }
+
+    return mesh;
+}
+
+// Helper function to process an Assimp node recursively
+static void ProcessNode(rhi::GraphicsDevice* device, aiNode* node, const aiScene* scene,
+                       std::vector<std::unique_ptr<Mesh>>& meshes) {
+    // Process all meshes in this node
+    for (uint32_t i = 0; i < node->mNumMeshes; ++i) {
+        aiMesh* aiMesh = scene->mMeshes[node->mMeshes[i]];
+        auto mesh = ProcessMesh(device, aiMesh);
+        if (mesh) {
+            meshes.push_back(std::move(mesh));
+        }
+    }
+
+    // Process children nodes recursively
+    for (uint32_t i = 0; i < node->mNumChildren; ++i) {
+        ProcessNode(device, node->mChildren[i], scene, meshes);
+    }
+}
+
+bool Model::LoadFromFile(rhi::GraphicsDevice* device, const std::string& filepath) {
+    if (!device) {
+        METAGFX_ERROR << "Model::LoadFromFile - Invalid device";
+        return false;
+    }
+
+    METAGFX_INFO << "Loading model: " << filepath;
+
+    // Create Assimp importer
+    Assimp::Importer importer;
+
+    // Load the model with post-processing
+    // aiProcess_Triangulate: Convert all primitives to triangles
+    // aiProcess_FlipUVs: Flip texture coordinates on Y axis (OpenGL convention)
+    // aiProcess_GenNormals: Generate normals if not present
+    // aiProcess_CalcTangentSpace: Calculate tangents/bitangents (for normal mapping later)
+    // aiProcess_JoinIdenticalVertices: Optimize by merging identical vertices
+    const aiScene* scene = importer.ReadFile(filepath,
+        aiProcess_Triangulate |
+        aiProcess_FlipUVs |
+        aiProcess_GenNormals |
+        aiProcess_CalcTangentSpace |
+        aiProcess_JoinIdenticalVertices
+    );
+
+    // Check for errors
+    if (!scene || scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !scene->mRootNode) {
+        METAGFX_ERROR << "Assimp error: " << importer.GetErrorString();
+        return false;
+    }
+
+    // Clear existing meshes
+    Cleanup();
+
+    // Process the scene
+    ProcessNode(device, scene->mRootNode, scene, m_Meshes);
+
+    if (m_Meshes.empty()) {
+        METAGFX_ERROR << "No meshes loaded from: " << filepath;
+        return false;
+    }
+
+    m_FilePath = filepath;
+    METAGFX_INFO << "Model loaded successfully: " << m_Meshes.size() << " meshes";
+    return true;
+}
+
+bool Model::CreateCube(rhi::GraphicsDevice* device, float size) {
+    if (!device) {
+        METAGFX_ERROR << "Model::CreateCube - Invalid device";
+        return false;
+    }
+
+    Cleanup();
+
+    float s = size * 0.5f;
+    
+    std::vector<Vertex> vertices = {
+        // Front face
+        {{-s, -s,  s}, {0, 0, 1}, {0, 0}},
+        {{ s, -s,  s}, {0, 0, 1}, {1, 0}},
+        {{ s,  s,  s}, {0, 0, 1}, {1, 1}},
+        {{-s,  s,  s}, {0, 0, 1}, {0, 1}},
+        
+        // Back face
+        {{ s, -s, -s}, {0, 0, -1}, {0, 0}},
+        {{-s, -s, -s}, {0, 0, -1}, {1, 0}},
+        {{-s,  s, -s}, {0, 0, -1}, {1, 1}},
+        {{ s,  s, -s}, {0, 0, -1}, {0, 1}},
+        
+        // Left face
+        {{-s, -s, -s}, {-1, 0, 0}, {0, 0}},
+        {{-s, -s,  s}, {-1, 0, 0}, {1, 0}},
+        {{-s,  s,  s}, {-1, 0, 0}, {1, 1}},
+        {{-s,  s, -s}, {-1, 0, 0}, {0, 1}},
+        
+        // Right face
+        {{ s, -s,  s}, {1, 0, 0}, {0, 0}},
+        {{ s, -s, -s}, {1, 0, 0}, {1, 0}},
+        {{ s,  s, -s}, {1, 0, 0}, {1, 1}},
+        {{ s,  s,  s}, {1, 0, 0}, {0, 1}},
+        
+        // Top face
+        {{-s,  s,  s}, {0, 1, 0}, {0, 0}},
+        {{ s,  s,  s}, {0, 1, 0}, {1, 0}},
+        {{ s,  s, -s}, {0, 1, 0}, {1, 1}},
+        {{-s,  s, -s}, {0, 1, 0}, {0, 1}},
+        
+        // Bottom face
+        {{-s, -s, -s}, {0, -1, 0}, {0, 0}},
+        {{ s, -s, -s}, {0, -1, 0}, {1, 0}},
+        {{ s, -s,  s}, {0, -1, 0}, {1, 1}},
+        {{-s, -s,  s}, {0, -1, 0}, {0, 1}}
+    };
+
+    std::vector<uint32_t> indices = {
+        0, 1, 2,  2, 3, 0,    // Front
+        4, 5, 6,  6, 7, 4,    // Back
+        8, 9, 10, 10, 11, 8,  // Left
+        12, 13, 14, 14, 15, 12, // Right
+        16, 17, 18, 18, 19, 16, // Top
+        20, 21, 22, 22, 23, 20  // Bottom
+    };
+
+    auto mesh = std::make_unique<Mesh>();
+    if (!mesh->Initialize(device, vertices, indices)) {
+        METAGFX_ERROR << "Failed to create cube mesh";
+        return false;
+    }
+
+    m_Meshes.push_back(std::move(mesh));
+    m_FilePath = "procedural_cube";
+    return true;
+}
+
+bool Model::CreateSphere(rhi::GraphicsDevice* device, float radius, uint32_t segments) {
+    if (!device) {
+        METAGFX_ERROR << "Model::CreateSphere - Invalid device";
+        return false;
+    }
+
+    Cleanup();
+
+    std::vector<Vertex> vertices;
+    std::vector<uint32_t> indices;
+
+    // Generate sphere vertices
+    for (uint32_t y = 0; y <= segments; ++y) {
+        float phi = glm::pi<float>() * static_cast<float>(y) / static_cast<float>(segments);
+        
+        for (uint32_t x = 0; x <= segments; ++x) {
+            float theta = 2.0f * glm::pi<float>() * static_cast<float>(x) / static_cast<float>(segments);
+            
+            Vertex vertex;
+            vertex.position.x = radius * std::sin(phi) * std::cos(theta);
+            vertex.position.y = radius * std::cos(phi);
+            vertex.position.z = radius * std::sin(phi) * std::sin(theta);
+            
+            vertex.normal = glm::normalize(vertex.position);
+            
+            vertex.texCoord.x = static_cast<float>(x) / static_cast<float>(segments);
+            vertex.texCoord.y = static_cast<float>(y) / static_cast<float>(segments);
+            
+            vertices.push_back(vertex);
+        }
+    }
+
+    // Generate sphere indices
+    for (uint32_t y = 0; y < segments; ++y) {
+        for (uint32_t x = 0; x < segments; ++x) {
+            uint32_t current = y * (segments + 1) + x;
+            uint32_t next = current + segments + 1;
+            
+            indices.push_back(current);
+            indices.push_back(next);
+            indices.push_back(current + 1);
+            
+            indices.push_back(current + 1);
+            indices.push_back(next);
+            indices.push_back(next + 1);
+        }
+    }
+
+    auto mesh = std::make_unique<Mesh>();
+    if (!mesh->Initialize(device, vertices, indices)) {
+        METAGFX_ERROR << "Failed to create sphere mesh";
+        return false;
+    }
+
+    m_Meshes.push_back(std::move(mesh));
+    m_FilePath = "procedural_sphere";
+    return true;
+}
+
+void Model::Cleanup() {
+    m_Meshes.clear();
+    m_FilePath.clear();
+}
+
+} // namespace metagfx

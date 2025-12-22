@@ -8,6 +8,7 @@
 #include "metagfx/rhi/Buffer.h"
 #include "metagfx/rhi/Pipeline.h"
 #include "metagfx/scene/Camera.h"
+#include "metagfx/scene/Model.h"
 #include <SDL3/SDL.h>
 #include <glm/glm.hpp>
 #include <string>
@@ -40,6 +41,7 @@ public:
 private:
     void Init();
     void CreateTriangle();
+    void CreateModelPipeline();
     void ProcessEvents();
     void Update(float deltaTime);
     void Render();
@@ -52,13 +54,14 @@ private:
     Ref<rhi::GraphicsDevice> m_Device;
     Ref<rhi::Buffer> m_VertexBuffer;
     Ref<rhi::Pipeline> m_Pipeline;
+    Ref<rhi::Pipeline> m_ModelPipeline;
 
     // Camera
     std::unique_ptr<Camera> m_Camera;
     bool m_FirstMouse = true;
     float m_LastX = 640.0f;
     float m_LastY = 360.0f;
-    bool m_CameraEnabled = false;
+    bool m_CameraEnabled = true;
     
     // Uniform buffers
     struct UniformBufferObject {
@@ -70,6 +73,9 @@ private:
     Ref<rhi::Buffer> m_UniformBuffers[2];  // Double buffering
     std::unique_ptr<rhi::VulkanDescriptorSet> m_DescriptorSet;
     uint32 m_CurrentFrame = 0;
+
+    // Model
+    std::unique_ptr<Model> m_Model;
 };
 
 } // namespace metagfx
