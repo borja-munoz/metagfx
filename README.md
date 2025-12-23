@@ -211,6 +211,12 @@ cmake .. -DMETAGFX_BUILD_TESTS=ON     # Build tests (default: OFF)
 
 ---
 
-## License
+## Resources
 
-MIT
+Models and scenes repositories:
+
+- [Benedikt Bitterli Rendering Resources](https://benedikt-bitterli.me/resources/). Different PBR scenes in Tungsten, Mitsuba and PBRT formats. 
+- [McGuire Computer Graphics Archive](https://casual-effects.com/data/). Meshes in OBJ format.
+- [PBRT-v4 Scenes](https://github.com/mmp/pbrt-v4-scenes). Github repo with scenes for PBRT v4.
+- [ambientCG](https://ambientcg.com). 3D assets including PBR surfaces, HDRIs, models...
+- [Open Research Content Archive](https://developer.nvidia.com/orca). 3D assets donated by Amazon Lumberyard, SpeedTree, NVIDIA and Epic in FBX format.
