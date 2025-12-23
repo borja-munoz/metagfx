@@ -107,6 +107,22 @@ Complete texture system design and implementation (Milestone 2.3):
 
 ---
 
+#### [Light System](light_system.md)
+**Topics**: Dynamic lighting with multiple light types
+
+Complete light system design and implementation (Milestone 3.1):
+- Light class hierarchy (Light base, DirectionalLight, PointLight, SpotLight)
+- Scene integration with up to 16 lights
+- GPU-compatible std140 layout (1040-byte light buffer)
+- Forward rendering with Blinn-Phong shading
+- Distance attenuation for point and spot lights
+- Spot light cone angles with smooth falloff
+- Descriptor binding 3 for light buffer
+- Per-frame light buffer updates
+- Test scene with 4 lights (2 directional, 1 point, 1 spot)
+
+---
+
 ## Project Documentation
 
 ### Root Level Documents
@@ -180,7 +196,8 @@ Per-milestone implementation notes and artifacts:
 2. [Model Loading](model_loading.md) - Asset pipeline
 3. [Material System](material_system.md) - Materials and lighting
 4. [Textures and Samplers](textures_and_samplers.md) - Texture system
-5. [Roadmap](../claude/metagfx_roadmap.md) - Future features
+5. [Light System](light_system.md) - Dynamic lighting
+6. [Roadmap](../claude/metagfx_roadmap.md) - Future features
 
 **Development**:
 1. [CLAUDE.md](../CLAUDE.md) - Development guide
@@ -229,7 +246,7 @@ cd bin
 ```
 
 ### Project Status
-**Current Milestone**: 2.3 (Textures and Samplers) ✅ Complete
+**Current Milestone**: 3.1 (Light System) ✅ Complete
 **Implemented Features**:
 - ✅ Vulkan backend
 - ✅ Camera system with FPS controls
@@ -238,11 +255,12 @@ cd bin
 - ✅ Material system (albedo, roughness, metallic)
 - ✅ Blinn-Phong lighting (ambient, diffuse, specular)
 - ✅ Texture system (albedo maps, samplers, stb_image)
+- ✅ Light system (directional, point, spot lights - up to 16 lights)
 
 **Next Milestones**:
-- 3.1: Light System (point, directional, spot)
-- 3.2: Normal Mapping
+- 3.2: PBR (Physically Based Rendering)
 - 3.3: Shadow Mapping
+- 4.1: Direct3D 12 Implementation
 
 ### Key Files
 | File | Purpose |

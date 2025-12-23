@@ -146,7 +146,14 @@ void Application::Init() {
         m_Device.get(), checkerboardImage, rhi::Format::R8G8B8A8_UNORM
     );
 
-    // Create descriptor set with 3 bindings
+    // Create scene and initialize light buffer
+    m_Scene = std::make_unique<Scene>();
+    m_Scene->InitializeLightBuffer(m_Device.get());
+
+    // Create test lights
+    CreateTestLights();
+
+    // Create descriptor set with 4 bindings
     std::vector<rhi::DescriptorBinding> bindings = {
         {
             0,  // binding = 0 (MVP matrices)
@@ -171,6 +178,14 @@ void Application::Init() {
             nullptr,  // buffer
             m_DefaultTexture,
             m_LinearRepeatSampler
+        },
+        {
+            3,  // binding = 3 (Light buffer)
+            VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+            VK_SHADER_STAGE_FRAGMENT_BIT,
+            m_Scene->GetLightBuffer(),
+            nullptr,  // texture
+            nullptr   // sampler
         }
     };
     
@@ -203,6 +218,47 @@ void Application::Init() {
     METAGFX_INFO << "Model loaded successfully";
     METAGFX_INFO << "Controls: WASD to move, QE for up/down, Mouse to look, C to toggle camera, ESC to exit";
     m_Running = true;
+}
+
+void Application::CreateTestLights() {
+    // Key light: Directional light (sun/moon)
+    auto keyLight = std::make_unique<DirectionalLight>(
+        glm::vec3(0.5f, -1.0f, 0.3f),     // Direction
+        glm::vec3(1.0f, 0.95f, 0.9f),     // Warm white color
+        1.5f                               // Intensity (increased from 0.8)
+    );
+    m_Scene->AddLight(std::move(keyLight));
+
+    // Fill light: Directional from opposite side
+    auto fillLight = std::make_unique<DirectionalLight>(
+        glm::vec3(-0.3f, -0.5f, -0.8f),   // Direction
+        glm::vec3(0.4f, 0.5f, 0.7f),      // Cool blue color
+        0.6f                               // Intensity (increased from 0.3)
+    );
+    m_Scene->AddLight(std::move(fillLight));
+
+    // Accent point light (rotating around model)
+    auto pointLight = std::make_unique<PointLight>(
+        glm::vec3(2.0f, 1.0f, 0.0f),      // Position
+        5.0f,                              // Range
+        glm::vec3(1.0f, 0.3f, 0.1f),      // Orange/red color
+        3.0f                               // Intensity (increased from 2.0)
+    );
+    m_Scene->AddLight(std::move(pointLight));
+
+    // Spot light (flashlight effect)
+    auto spotLight = std::make_unique<SpotLight>(
+        glm::vec3(0.0f, 3.0f, 2.0f),      // Position
+        glm::vec3(0.0f, -1.0f, -0.5f),    // Direction
+        12.5f,                             // Inner cone (degrees)
+        20.0f,                             // Outer cone (degrees)
+        8.0f,                              // Range
+        glm::vec3(1.0f, 1.0f, 1.0f),      // White color
+        5.0f                               // Intensity (increased from 3.0)
+    );
+    m_Scene->AddLight(std::move(spotLight));
+
+    METAGFX_INFO << "Created " << m_Scene->GetLightCount() << " test lights";
 }
 
 void Application::CreateTriangle() {
@@ -443,6 +499,9 @@ void Application::Render() {
     // FIXME: Descriptor sets all point to buffer[0], so always update buffer[0]
     // TODO: Properly configure double buffering in descriptor sets
     m_UniformBuffers[0]->CopyData(&ubo, sizeof(ubo));
+
+    // Update light buffer before rendering
+    m_Scene->UpdateLightBuffer();
     
     // Create command buffer
     auto cmd = m_Device->CreateCommandBuffer();
@@ -542,7 +601,8 @@ void Application::Shutdown() {
         m_Device->WaitIdle();
     }
 
-    // Clean up model
+    // Clean up scene and model
+    m_Scene.reset();
     if (m_Model) {
         m_Model->Cleanup();
         m_Model.reset();

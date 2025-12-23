@@ -9,6 +9,7 @@
 #include "metagfx/rhi/Pipeline.h"
 #include "metagfx/scene/Camera.h"
 #include "metagfx/scene/Model.h"
+#include "metagfx/scene/Scene.h"
 #include <SDL3/SDL.h>
 #include <glm/glm.hpp>
 #include <string>
@@ -44,6 +45,7 @@ private:
     void Init();
     void CreateTriangle();
     void CreateModelPipeline();
+    void CreateTestLights();
     void ProcessEvents();
     void Update(float deltaTime);
     void Render();
@@ -81,7 +83,8 @@ private:
     Ref<rhi::Sampler> m_LinearRepeatSampler;
     Ref<rhi::Texture> m_DefaultTexture;  // White 1x1 fallback texture
 
-    // Model
+    // Scene and model
+    std::unique_ptr<Scene> m_Scene;
     std::unique_ptr<Model> m_Model;
 };
 

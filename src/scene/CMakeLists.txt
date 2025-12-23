@@ -3,6 +3,7 @@
 # ============================================================================
 set(SCENE_SOURCES
     Camera.cpp
+    Light.cpp
     Material.cpp
     Mesh.cpp
     Model.cpp
@@ -11,6 +12,7 @@ set(SCENE_SOURCES
 
 set(SCENE_HEADERS
     ${CMAKE_SOURCE_DIR}/include/metagfx/scene/Camera.h
+    ${CMAKE_SOURCE_DIR}/include/metagfx/scene/Light.h
     ${CMAKE_SOURCE_DIR}/include/metagfx/scene/Material.h
     ${CMAKE_SOURCE_DIR}/include/metagfx/scene/Mesh.h
     ${CMAKE_SOURCE_DIR}/include/metagfx/scene/Model.h
