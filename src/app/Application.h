@@ -20,6 +20,8 @@ namespace rhi {
     class GraphicsDevice;
     class Buffer;
     class Pipeline;
+    class Texture;
+    class Sampler;
     class VulkanDescriptorSet;
 }
 
@@ -74,6 +76,10 @@ private:
     Ref<rhi::Buffer> m_MaterialBuffers[2];  // Double buffering for material
     std::unique_ptr<rhi::VulkanDescriptorSet> m_DescriptorSet;
     uint32 m_CurrentFrame = 0;
+
+    // Texture resources
+    Ref<rhi::Sampler> m_LinearRepeatSampler;
+    Ref<rhi::Texture> m_DefaultTexture;  // White 1x1 fallback texture
 
     // Model
     std::unique_ptr<Model> m_Model;

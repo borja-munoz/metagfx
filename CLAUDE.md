@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 MetaGFX is a backend-agnostic physically-based renderer implementing a common abstract core with multiple graphics API backends (Vulkan, Direct3D 12, Metal, WebGPU). The project is organized around a phased roadmap with milestones tracked in `claude/metagfx_roadmap.md`.
 
-**Current Status**: Milestone 2.1 completed (Model Loading with Assimp). The renderer can load 3D models from various file formats (OBJ, FBX, glTF, COLLADA) and render them with basic lighting.
+**Current Status**: Milestone 2.3 completed (Textures and Samplers). The renderer can load 3D models from various file formats (OBJ, FBX, glTF, COLLADA), render them with materials (albedo, roughness, metallic), Blinn-Phong lighting, and albedo texture maps.
 
 ## Build Commands
 
@@ -126,7 +126,8 @@ The RHI is the core abstraction that enables multi-backend support. Key principl
 - `SwapChain` - Presentation and back buffer management
 - `CommandBuffer` - Command recording (draw calls, state changes, etc.)
 - `Buffer` - GPU buffers (vertex, index, uniform)
-- `Texture` - Images and sampling (future)
+- `Texture` - Images and sampling (implemented)
+- `Sampler` - Texture sampling configuration (implemented)
 - `Shader` - Shader modules from SPIR-V bytecode
 - `Pipeline` - Graphics pipeline state objects
 - `Types.h` - Enums and structs (GraphicsAPI, BufferUsage, ShaderStage, Format, etc.)
@@ -148,7 +149,7 @@ The RHI is the core abstraction that enables multi-backend support. Key principl
 - **Assimp**: 3D model loading (OBJ, FBX, glTF, COLLADA importers enabled)
 - **GLM**: Mathematics library for vectors, matrices
 - **SDL3**: Window management and input
-- **stb**: Image loading (future use)
+- **stb**: Image loading (stb_image for PNG, JPEG, TGA, BMP)
 
 ### Smart Pointers Convention
 
@@ -178,6 +179,14 @@ The codebase uses type aliases for smart pointers:
 - Loads models from files using Assimp (OBJ, FBX, glTF, COLLADA)
 - Procedural geometry generation (CreateCube, CreateSphere)
 - Processes Assimp scene graph recursively
+- Extracts materials and textures from model files
+
+**Material** (`include/metagfx/scene/Material.h`):
+- Material properties: albedo (vec3), roughness (float), metallic (float)
+- Optional albedo texture support with texture flags
+- GPU-compatible std140 layout for uniform buffers
+- Blinn-Phong lighting model (ambient, diffuse, specular)
+- Backward compatible (textured and non-textured materials)
 
 ## Development Workflow
 
@@ -273,6 +282,8 @@ Key documentation files:
 - `docs/rhi.md` - RHI architecture and design principles
 - `docs/camera_transformation_system.md` - Camera implementation details
 - `docs/model_loading.md` - Model loading system design (Mesh, Model, Assimp integration)
+- `docs/material_system.md` - Material system and Blinn-Phong lighting
+- `docs/textures_and_samplers.md` - Texture loading, sampling, and material integration
 - `claude/metagfx_roadmap.md` - Full implementation roadmap (10 phases, 30+ milestones)
 - `claude/milestone_x_y/` - Per-milestone implementation notes
 

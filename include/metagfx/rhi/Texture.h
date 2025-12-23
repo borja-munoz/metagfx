@@ -12,11 +12,14 @@ namespace rhi {
 class Texture {
 public:
     virtual ~Texture() = default;
-    
+
     virtual uint32 GetWidth() const = 0;
     virtual uint32 GetHeight() const = 0;
     virtual Format GetFormat() const = 0;
-    
+
+    // Upload pixel data to GPU
+    virtual void UploadData(const void* data, uint64 size) = 0;
+
 protected:
     Texture() = default;
 };

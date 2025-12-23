@@ -113,11 +113,11 @@ VulkanPipeline::VulkanPipeline(VulkanContext& context, const PipelineDesc& desc,
     dynamicState.dynamicStateCount = 2;
     dynamicState.pDynamicStates = dynamicStates;
     
-    // Pipeline layout with push constants for camera position
+    // Pipeline layout with push constants for camera position and material flags
     VkPushConstantRange pushConstantRange{};
     pushConstantRange.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
     pushConstantRange.offset = 0;
-    pushConstantRange.size = 16;  // vec4 (16 bytes)
+    pushConstantRange.size = 32;  // vec4 cameraPosition + uint materialFlags + padding (32 bytes)
 
     VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
     pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;

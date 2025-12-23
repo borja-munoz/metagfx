@@ -33,4 +33,14 @@ void Material::SetMetallic(float metallic) {
     m_Properties.metallic = std::clamp(metallic, 0.0f, 1.0f);
 }
 
+void Material::SetAlbedoMap(Ref<rhi::Texture> texture) {
+    m_AlbedoMap = texture;
+
+    if (texture) {
+        m_TextureFlags |= static_cast<uint32>(MaterialTextureFlags::HasAlbedoMap);
+    } else {
+        m_TextureFlags &= ~static_cast<uint32>(MaterialTextureFlags::HasAlbedoMap);
+    }
+}
+
 } // namespace metagfx

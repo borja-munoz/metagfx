@@ -12,9 +12,14 @@ layout(binding = 1) uniform MaterialUBO {
     float metallic;
 } material;
 
-// Push constants for camera position
+// Albedo texture sampler
+layout(binding = 2) uniform sampler2D albedoSampler;
+
+// Push constants for camera position and material flags
 layout(push_constant) uniform PushConstants {
-    vec4 cameraPosition;  // Using vec4 for alignment (only xyz used)
+    vec4 cameraPosition;  // Using vec4 for alignment (xyz = position, w unused)
+    uint materialFlags;   // Bit 0: has albedo texture
+    uint padding[3];      // Align to 16 bytes
 } pushConstants;
 
 // Output color
@@ -25,8 +30,13 @@ void main() {
     vec3 lightDir = normalize(vec3(1.0, 1.0, 1.0));
     vec3 lightColor = vec3(1.0, 1.0, 1.0);
 
-    // Use material color
-    vec3 objectColor = material.albedo;
+    // Use texture if present, otherwise scalar albedo
+    vec3 objectColor;
+    if ((pushConstants.materialFlags & 1u) != 0u) {
+        objectColor = texture(albedoSampler, fragTexCoord).rgb;
+    } else {
+        objectColor = material.albedo;
+    }
 
     // Ambient lighting
     float ambientStrength = 0.1;

@@ -3,9 +3,21 @@
 // ============================================================================
 #pragma once
 
+#include "metagfx/core/Types.h"
 #include <glm/glm.hpp>
 
 namespace metagfx {
+
+// Forward declarations
+namespace rhi {
+    class Texture;
+}
+
+// Material texture flags
+enum class MaterialTextureFlags : uint32 {
+    None = 0,
+    HasAlbedoMap = 1 << 0
+};
 
 // GPU-side structure (std140 layout compatible)
 // Total size: 32 bytes for optimal alignment
@@ -34,8 +46,16 @@ public:
     float GetRoughness() const { return m_Properties.roughness; }
     float GetMetallic() const { return m_Properties.metallic; }
 
+    // Texture management
+    void SetAlbedoMap(Ref<rhi::Texture> texture);
+    Ref<rhi::Texture> GetAlbedoMap() const { return m_AlbedoMap; }
+    bool HasAlbedoMap() const { return (m_TextureFlags & static_cast<uint32>(MaterialTextureFlags::HasAlbedoMap)) != 0; }
+    uint32 GetTextureFlags() const { return m_TextureFlags; }
+
 private:
     MaterialProperties m_Properties;
+    Ref<rhi::Texture> m_AlbedoMap;
+    uint32 m_TextureFlags = 0;
 };
 
 } // namespace metagfx

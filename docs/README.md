@@ -90,6 +90,23 @@ Complete material system design and implementation (Milestone 2.2):
 
 ---
 
+#### [Textures and Samplers](textures_and_samplers.md)
+**Topics**: Texture loading, sampling, and material integration
+
+Complete texture system design and implementation (Milestone 2.3):
+- Sampler abstraction with shared global sampler strategy
+- VulkanTexture implementation with device-local memory and staging buffers
+- TextureUtils for image loading with stb_image (PNG, JPEG, TGA, BMP)
+- Material extension with optional albedo texture support
+- Assimp texture extraction and path resolution
+- VulkanDescriptorSet extension for combined image samplers
+- Shader integration with conditional texture sampling
+- UV checker textures for debugging texture mapping
+- Push constants for material texture flags
+- Backward compatibility with non-textured materials
+
+---
+
 ## Project Documentation
 
 ### Root Level Documents
@@ -162,7 +179,8 @@ Per-milestone implementation notes and artifacts:
 1. [Camera System](camera_transformation_system.md) - Viewport and controls
 2. [Model Loading](model_loading.md) - Asset pipeline
 3. [Material System](material_system.md) - Materials and lighting
-4. [Roadmap](../claude/metagfx_roadmap.md) - Future features
+4. [Textures and Samplers](textures_and_samplers.md) - Texture system
+5. [Roadmap](../claude/metagfx_roadmap.md) - Future features
 
 **Development**:
 1. [CLAUDE.md](../CLAUDE.md) - Development guide
@@ -211,7 +229,7 @@ cd bin
 ```
 
 ### Project Status
-**Current Milestone**: 2.2 (Basic Material System) ✅ Complete
+**Current Milestone**: 2.3 (Textures and Samplers) ✅ Complete
 **Implemented Features**:
 - ✅ Vulkan backend
 - ✅ Camera system with FPS controls
@@ -219,11 +237,12 @@ cd bin
 - ✅ Procedural geometry (cube, sphere)
 - ✅ Material system (albedo, roughness, metallic)
 - ✅ Blinn-Phong lighting (ambient, diffuse, specular)
+- ✅ Texture system (albedo maps, samplers, stb_image)
 
 **Next Milestones**:
-- 2.3: Textures and Samplers
 - 3.1: Light System (point, directional, spot)
-- 3.2: Shadow Mapping
+- 3.2: Normal Mapping
+- 3.3: Shadow Mapping
 
 ### Key Files
 | File | Purpose |
@@ -260,7 +279,7 @@ Future documentation needs:
 - [ ] D3D12 implementation guide (when implemented)
 - [ ] Metal implementation guide (when implemented)
 - [ ] WebGPU implementation guide (when implemented)
-- [ ] Texture system design (Milestone 2.3)
+- [x] Texture system design (Milestone 2.3) ✅ Complete
 - [ ] Lighting system design (Phase 3)
 - [ ] Performance optimization guide
 - [ ] Debugging and profiling guide

@@ -10,6 +10,7 @@ set(RHI_HEADERS
     ${CMAKE_SOURCE_DIR}/include/metagfx/rhi/Types.h
     ${CMAKE_SOURCE_DIR}/include/metagfx/rhi/Buffer.h
     ${CMAKE_SOURCE_DIR}/include/metagfx/rhi/Texture.h
+    ${CMAKE_SOURCE_DIR}/include/metagfx/rhi/Sampler.h
     ${CMAKE_SOURCE_DIR}/include/metagfx/rhi/Shader.h
     ${CMAKE_SOURCE_DIR}/include/metagfx/rhi/Pipeline.h
     ${CMAKE_SOURCE_DIR}/include/metagfx/rhi/CommandBuffer.h
@@ -24,6 +25,7 @@ if(METAGFX_USE_VULKAN)
         vulkan/VulkanSwapChain.cpp
         vulkan/VulkanBuffer.cpp
         vulkan/VulkanTexture.cpp
+        vulkan/VulkanSampler.cpp
         vulkan/VulkanShader.cpp
         vulkan/VulkanPipeline.cpp
         vulkan/VulkanCommandBuffer.cpp
@@ -35,6 +37,7 @@ if(METAGFX_USE_VULKAN)
         ${CMAKE_SOURCE_DIR}/include/metagfx/rhi/vulkan/VulkanSwapChain.h
         ${CMAKE_SOURCE_DIR}/include/metagfx/rhi/vulkan/VulkanBuffer.h
         ${CMAKE_SOURCE_DIR}/include/metagfx/rhi/vulkan/VulkanTexture.h
+        ${CMAKE_SOURCE_DIR}/include/metagfx/rhi/vulkan/VulkanSampler.h
         ${CMAKE_SOURCE_DIR}/include/metagfx/rhi/vulkan/VulkanShader.h
         ${CMAKE_SOURCE_DIR}/include/metagfx/rhi/vulkan/VulkanPipeline.h
         ${CMAKE_SOURCE_DIR}/include/metagfx/rhi/vulkan/VulkanCommandBuffer.h

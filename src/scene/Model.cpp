@@ -6,12 +6,14 @@
 #include "metagfx/rhi/GraphicsDevice.h"
 #include "metagfx/rhi/Types.h"
 #include "metagfx/core/Logger.h"
+#include "metagfx/utils/TextureUtils.h"
 
 #include <assimp/Importer.hpp>
 #include <assimp/scene.h>
 #include <assimp/postprocess.h>
 
 #include <glm/gtc/constants.hpp>
+#include <filesystem>
 
 namespace metagfx {
 
@@ -37,7 +39,9 @@ Model& Model::operator=(Model&& other) noexcept {
 }
 
 // Helper function to extract material from Assimp
-static std::unique_ptr<Material> ProcessMaterial(const aiMaterial* aiMat) {
+static std::unique_ptr<Material> ProcessMaterial(rhi::GraphicsDevice* device,
+                                                  const aiMaterial* aiMat,
+                                                  const std::string& modelDir) {
     if (!aiMat) {
         return std::make_unique<Material>();  // Return default material
     }
@@ -57,15 +61,38 @@ static std::unique_ptr<Material> ProcessMaterial(const aiMaterial* aiMat) {
     // Metallic defaults to 0.0 (no metallic data in basic formats like OBJ)
     float metallic = 0.0f;
 
-    return std::make_unique<Material>(
+    // Create material with scalar properties
+    auto material = std::make_unique<Material>(
         glm::vec3(diffuse.r, diffuse.g, diffuse.b),
         roughness,
         metallic
     );
+
+    // Extract albedo/diffuse texture
+    if (aiMat->GetTextureCount(aiTextureType_DIFFUSE) > 0) {
+        aiString texPath;
+        if (aiMat->GetTexture(aiTextureType_DIFFUSE, 0, &texPath) == AI_SUCCESS) {
+            // Resolve path relative to model directory
+            std::filesystem::path fullPath = std::filesystem::path(modelDir) / texPath.C_Str();
+
+            try {
+                auto texture = utils::LoadTexture(device, fullPath.string());
+                if (texture) {
+                    material->SetAlbedoMap(texture);
+                    METAGFX_INFO << "Loaded albedo texture: " << fullPath.string();
+                }
+            } catch (const std::exception& e) {
+                METAGFX_WARN << "Failed to load texture: " << fullPath.string() << " - " << e.what();
+            }
+        }
+    }
+
+    return material;
 }
 
 // Helper function to process an Assimp mesh
-static std::unique_ptr<Mesh> ProcessMesh(rhi::GraphicsDevice* device, aiMesh* aiMesh, const aiScene* scene) {
+static std::unique_ptr<Mesh> ProcessMesh(rhi::GraphicsDevice* device, aiMesh* aiMesh, const aiScene* scene,
+                                         const std::string& modelDir) {
     std::vector<Vertex> vertices;
     std::vector<uint32_t> indices;
 
@@ -123,7 +150,7 @@ static std::unique_ptr<Mesh> ProcessMesh(rhi::GraphicsDevice* device, aiMesh* ai
     // Extract and attach material
     if (scene && aiMesh->mMaterialIndex >= 0 && aiMesh->mMaterialIndex < scene->mNumMaterials) {
         aiMaterial* aiMat = scene->mMaterials[aiMesh->mMaterialIndex];
-        auto material = ProcessMaterial(aiMat);
+        auto material = ProcessMaterial(device, aiMat, modelDir);
         mesh->SetMaterial(std::move(material));
     } else {
         // Fallback to default material
@@ -135,11 +162,11 @@ static std::unique_ptr<Mesh> ProcessMesh(rhi::GraphicsDevice* device, aiMesh* ai
 
 // Helper function to process an Assimp node recursively
 static void ProcessNode(rhi::GraphicsDevice* device, aiNode* node, const aiScene* scene,
-                       std::vector<std::unique_ptr<Mesh>>& meshes) {
+                       std::vector<std::unique_ptr<Mesh>>& meshes, const std::string& modelDir) {
     // Process all meshes in this node
     for (uint32_t i = 0; i < node->mNumMeshes; ++i) {
         aiMesh* aiMesh = scene->mMeshes[node->mMeshes[i]];
-        auto mesh = ProcessMesh(device, aiMesh, scene);
+        auto mesh = ProcessMesh(device, aiMesh, scene, modelDir);
         if (mesh) {
             meshes.push_back(std::move(mesh));
         }
@@ -147,7 +174,7 @@ static void ProcessNode(rhi::GraphicsDevice* device, aiNode* node, const aiScene
 
     // Process children nodes recursively
     for (uint32_t i = 0; i < node->mNumChildren; ++i) {
-        ProcessNode(device, node->mChildren[i], scene, meshes);
+        ProcessNode(device, node->mChildren[i], scene, meshes, modelDir);
     }
 }
 
@@ -185,8 +212,15 @@ bool Model::LoadFromFile(rhi::GraphicsDevice* device, const std::string& filepat
     // Clear existing meshes
     Cleanup();
 
+    // Extract model directory for texture path resolution
+    std::filesystem::path modelPath(filepath);
+    std::string modelDir = modelPath.parent_path().string();
+    if (modelDir.empty()) {
+        modelDir = ".";  // Current directory if no path specified
+    }
+
     // Process the scene
-    ProcessNode(device, scene->mRootNode, scene, m_Meshes);
+    ProcessNode(device, scene->mRootNode, scene, m_Meshes, modelDir);
 
     if (m_Meshes.empty()) {
         METAGFX_ERROR << "No meshes loaded from: " << filepath;

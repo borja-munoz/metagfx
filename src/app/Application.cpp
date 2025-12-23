@@ -7,6 +7,7 @@
 #include "metagfx/rhi/CommandBuffer.h"
 #include "metagfx/rhi/GraphicsDevice.h"
 #include "metagfx/rhi/Pipeline.h"
+#include "metagfx/rhi/Sampler.h"
 #include "metagfx/rhi/Shader.h"
 #include "metagfx/rhi/SwapChain.h"
 #include "metagfx/rhi/Texture.h"
@@ -17,6 +18,7 @@
 #include "metagfx/scene/Camera.h"
 #include "metagfx/scene/Material.h"
 #include "metagfx/scene/Mesh.h"
+#include "metagfx/utils/TextureUtils.h"
 #include <SDL3/SDL.h>
 #include <glm/glm.hpp>
 
@@ -104,20 +106,71 @@ void Application::Init() {
 
     m_MaterialBuffers[0] = m_Device->CreateBuffer(materialBufferDesc);
     m_MaterialBuffers[1] = m_Device->CreateBuffer(materialBufferDesc);
-    
-    // Create descriptor set with 2 bindings (test: does extra binding break it?)
+
+    // Create shared sampler
+    rhi::SamplerDesc samplerDesc{};
+    samplerDesc.minFilter = rhi::Filter::Linear;
+    samplerDesc.magFilter = rhi::Filter::Linear;
+    samplerDesc.mipmapMode = rhi::Filter::Linear;
+    samplerDesc.addressModeU = rhi::SamplerAddressMode::Repeat;
+    samplerDesc.addressModeV = rhi::SamplerAddressMode::Repeat;
+    samplerDesc.addressModeW = rhi::SamplerAddressMode::Repeat;
+    samplerDesc.anisotropyEnable = true;
+    samplerDesc.maxAnisotropy = 16.0f;
+    m_LinearRepeatSampler = m_Device->CreateSampler(samplerDesc);
+
+    // Create default UV checker texture (magenta/white pattern) - 128x128 with 8x8 pixel checkers
+    // This creates a 16x16 grid of checkers to show UV mapping detail
+    constexpr int texSize = 128;
+    constexpr int checkerSize = 8;  // 8x8 pixel checker squares
+    uint8_t checkerboardPixels[texSize * texSize * 4];
+    for (int y = 0; y < texSize; y++) {
+        for (int x = 0; x < texSize; x++) {
+            int idx = (y * texSize + x) * 4;
+            bool isMagenta = ((x / checkerSize) + (y / checkerSize)) % 2 == 0;
+            if (isMagenta) {
+                checkerboardPixels[idx + 0] = 255;  // R - Magenta
+                checkerboardPixels[idx + 1] = 0;    // G
+                checkerboardPixels[idx + 2] = 255;  // B
+                checkerboardPixels[idx + 3] = 255;  // A
+            } else {
+                checkerboardPixels[idx + 0] = 255;  // R - White
+                checkerboardPixels[idx + 1] = 255;  // G
+                checkerboardPixels[idx + 2] = 255;  // B
+                checkerboardPixels[idx + 3] = 255;  // A
+            }
+        }
+    }
+    utils::ImageData checkerboardImage{checkerboardPixels, texSize, texSize, 4};
+    m_DefaultTexture = utils::CreateTextureFromImage(
+        m_Device.get(), checkerboardImage, rhi::Format::R8G8B8A8_UNORM
+    );
+
+    // Create descriptor set with 3 bindings
     std::vector<rhi::DescriptorBinding> bindings = {
         {
             0,  // binding = 0 (MVP matrices)
             VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
             VK_SHADER_STAGE_VERTEX_BIT,
-            m_UniformBuffers[0]
+            m_UniformBuffers[0],
+            nullptr,  // texture
+            nullptr   // sampler
         },
         {
-            1,  // binding = 1 (Material - not used by shader yet)
+            1,  // binding = 1 (Material properties)
             VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
             VK_SHADER_STAGE_FRAGMENT_BIT,
-            m_MaterialBuffers[0]
+            m_MaterialBuffers[0],
+            nullptr,  // texture
+            nullptr   // sampler
+        },
+        {
+            2,  // binding = 2 (Albedo texture sampler)
+            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+            VK_SHADER_STAGE_FRAGMENT_BIT,
+            nullptr,  // buffer
+            m_DefaultTexture,
+            m_LinearRepeatSampler
         }
     };
     
@@ -137,11 +190,10 @@ void Application::Init() {
     // Create model pipeline
     CreateModelPipeline();
 
-    // Load bunny model
+    // Load bunny model with texture coordinates
     m_Model = std::make_unique<Model>();
-    if (!m_Model->LoadFromFile(m_Device.get(), "../../assets/models/bunny.obj")) {
-        METAGFX_WARN << "Failed to load bunny.obj, falling back to procedural cube";
-        // Fallback to procedural cube if model loading fails
+    if (!m_Model->LoadFromFile(m_Device.get(), "../../assets/models/bunny_tex_coords.obj")) {
+        METAGFX_WARN << "Failed to load bunny_tex_coords.obj, falling back to procedural cube";
         if (!m_Model->CreateCube(m_Device.get(), 1.0f)) {
             METAGFX_ERROR << "Failed to create fallback cube model";
             return;
@@ -439,9 +491,32 @@ void Application::Render() {
         // Draw all meshes in the model
         for (const auto& mesh : m_Model->GetMeshes()) {
             if (mesh && mesh->IsValid() && mesh->GetMaterial()) {
+                Material* material = mesh->GetMaterial();
+
                 // Update material buffer for this mesh
-                MaterialProperties matProps = mesh->GetMaterial()->GetProperties();
+                MaterialProperties matProps = material->GetProperties();
                 m_MaterialBuffers[0]->CopyData(&matProps, sizeof(matProps));
+
+                // Bind texture (albedo map if present, otherwise default checkerboard)
+                Ref<rhi::Texture> albedoMap = material->GetAlbedoMap();
+                uint32_t flags;
+                if (albedoMap) {
+                    m_DescriptorSet->UpdateTexture(2, albedoMap, m_LinearRepeatSampler);
+                    flags = material->GetTextureFlags();
+                } else {
+                    // Use default checkerboard texture and force texture flag on
+                    m_DescriptorSet->UpdateTexture(2, m_DefaultTexture, m_LinearRepeatSampler);
+                    flags = static_cast<uint32_t>(MaterialTextureFlags::HasAlbedoMap);
+                }
+
+                // Re-bind descriptor set after texture update
+                vkCmd->BindDescriptorSet(vkPipeline->GetLayout(),
+                                        m_DescriptorSet->GetSet(0));
+
+                // Push material flags (offset 16 bytes after cameraPosition vec4)
+                vkCmd->PushConstants(vkPipeline->GetLayout(),
+                                    VK_SHADER_STAGE_FRAGMENT_BIT,
+                                    16, sizeof(uint32_t), &flags);
 
                 // Bind and draw
                 cmd->BindVertexBuffer(mesh->GetVertexBuffer());
@@ -481,6 +556,8 @@ void Application::Shutdown() {
     m_MaterialBuffers[0].reset();
     m_MaterialBuffers[1].reset();
     m_DescriptorSet.reset();
+    m_DefaultTexture.reset();      // Clean up before device
+    m_LinearRepeatSampler.reset(); // Clean up before device
     m_Device.reset();
     
     if (m_Window) {

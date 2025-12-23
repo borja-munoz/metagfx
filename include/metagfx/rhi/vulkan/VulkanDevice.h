@@ -20,6 +20,7 @@ public:
     
     Ref<Buffer> CreateBuffer(const BufferDesc& desc) override;
     Ref<Texture> CreateTexture(const TextureDesc& desc) override;
+    Ref<Sampler> CreateSampler(const SamplerDesc& desc) override;
     Ref<Shader> CreateShader(const ShaderDesc& desc) override;
     Ref<Pipeline> CreateGraphicsPipeline(const PipelineDesc& desc) override;
     

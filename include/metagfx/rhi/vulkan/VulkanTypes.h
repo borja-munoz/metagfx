@@ -30,7 +30,8 @@ struct VulkanContext {
     uint32 graphicsQueueFamily = 0;
     uint32 presentQueueFamily = 0;
     VkSurfaceKHR surface = VK_NULL_HANDLE;
-    
+    VkCommandPool commandPool = VK_NULL_HANDLE;
+
     VkPhysicalDeviceProperties deviceProperties;
     VkPhysicalDeviceFeatures deviceFeatures;
     VkPhysicalDeviceMemoryProperties memoryProperties;

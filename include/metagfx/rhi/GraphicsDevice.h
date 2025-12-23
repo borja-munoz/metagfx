@@ -12,6 +12,7 @@ namespace rhi {
 // Forward declarations
 class Buffer;
 class Texture;
+class Sampler;
 class Shader;
 class Pipeline;
 class CommandBuffer;
@@ -27,6 +28,7 @@ public:
     // Resource creation
     virtual Ref<Buffer> CreateBuffer(const BufferDesc& desc) = 0;
     virtual Ref<Texture> CreateTexture(const TextureDesc& desc) = 0;
+    virtual Ref<Sampler> CreateSampler(const SamplerDesc& desc) = 0;
     virtual Ref<Shader> CreateShader(const ShaderDesc& desc) = 0;
     virtual Ref<Pipeline> CreateGraphicsPipeline(const PipelineDesc& desc) = 0;
     

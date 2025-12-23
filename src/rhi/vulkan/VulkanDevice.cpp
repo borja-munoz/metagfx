@@ -6,6 +6,7 @@
 #include "metagfx/rhi/vulkan/VulkanSwapChain.h"
 #include "metagfx/rhi/vulkan/VulkanBuffer.h"
 #include "metagfx/rhi/vulkan/VulkanTexture.h"
+#include "metagfx/rhi/vulkan/VulkanSampler.h"
 #include "metagfx/rhi/vulkan/VulkanShader.h"
 #include "metagfx/rhi/vulkan/VulkanPipeline.h"
 #include "metagfx/rhi/vulkan/VulkanCommandBuffer.h"
@@ -189,8 +190,9 @@ void VulkanDevice::CreateCommandPool() {
     poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
     poolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
     poolInfo.queueFamilyIndex = m_Context.graphicsQueueFamily;
-    
+
     VK_CHECK(vkCreateCommandPool(m_Context.device, &poolInfo, nullptr, &m_CommandPool));
+    m_Context.commandPool = m_CommandPool;
 }
 
 Ref<Buffer> VulkanDevice::CreateBuffer(const BufferDesc& desc) {
@@ -199,6 +201,10 @@ Ref<Buffer> VulkanDevice::CreateBuffer(const BufferDesc& desc) {
 
 Ref<Texture> VulkanDevice::CreateTexture(const TextureDesc& desc) {
     return CreateRef<VulkanTexture>(m_Context, desc);
+}
+
+Ref<Sampler> VulkanDevice::CreateSampler(const SamplerDesc& desc) {
+    return CreateRef<VulkanSampler>(m_Context, desc);
 }
 
 Ref<Shader> VulkanDevice::CreateShader(const ShaderDesc& desc) {

@@ -4,6 +4,8 @@
 #include "metagfx/core/Logger.h"
 #include "metagfx/rhi/vulkan/VulkanDescriptorSet.h"
 #include "metagfx/rhi/vulkan/VulkanBuffer.h"
+#include "metagfx/rhi/vulkan/VulkanTexture.h"
+#include "metagfx/rhi/vulkan/VulkanSampler.h"
 
 namespace metagfx {
 namespace rhi {
@@ -85,31 +87,58 @@ void VulkanDescriptorSet::UpdateSets(const std::vector<DescriptorBinding>& bindi
     for (uint32 i = 0; i < MAX_FRAMES; i++) {
         std::vector<VkWriteDescriptorSet> descriptorWrites;
         std::vector<VkDescriptorBufferInfo> bufferInfos;
+        std::vector<VkDescriptorImageInfo> imageInfos;
 
         // Reserve space to prevent reallocation (which would invalidate pointers)
         bufferInfos.reserve(bindings.size());
+        imageInfos.reserve(bindings.size());
         descriptorWrites.reserve(bindings.size());
 
         for (const auto& binding : bindings) {
-            if (binding.buffer) {
-                auto vkBuffer = std::static_pointer_cast<VulkanBuffer>(binding.buffer);
+            if (binding.type == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER ||
+                binding.type == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER) {
+                if (binding.buffer) {
+                    auto vkBuffer = std::static_pointer_cast<VulkanBuffer>(binding.buffer);
 
-                VkDescriptorBufferInfo bufferInfo{};
-                bufferInfo.buffer = vkBuffer->GetHandle();
-                bufferInfo.offset = 0;
-                bufferInfo.range = vkBuffer->GetSize();
-                bufferInfos.push_back(bufferInfo);
+                    VkDescriptorBufferInfo bufferInfo{};
+                    bufferInfo.buffer = vkBuffer->GetHandle();
+                    bufferInfo.offset = 0;
+                    bufferInfo.range = vkBuffer->GetSize();
+                    bufferInfos.push_back(bufferInfo);
 
-                VkWriteDescriptorSet descriptorWrite{};
-                descriptorWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                descriptorWrite.dstSet = m_DescriptorSets[i];
-                descriptorWrite.dstBinding = binding.binding;
-                descriptorWrite.dstArrayElement = 0;
-                descriptorWrite.descriptorType = binding.type;
-                descriptorWrite.descriptorCount = 1;
-                descriptorWrite.pBufferInfo = &bufferInfos.back();
+                    VkWriteDescriptorSet descriptorWrite{};
+                    descriptorWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                    descriptorWrite.dstSet = m_DescriptorSets[i];
+                    descriptorWrite.dstBinding = binding.binding;
+                    descriptorWrite.dstArrayElement = 0;
+                    descriptorWrite.descriptorType = binding.type;
+                    descriptorWrite.descriptorCount = 1;
+                    descriptorWrite.pBufferInfo = &bufferInfos.back();
 
-                descriptorWrites.push_back(descriptorWrite);
+                    descriptorWrites.push_back(descriptorWrite);
+                }
+            } else if (binding.type == VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER) {
+                if (binding.texture && binding.sampler) {
+                    auto vkTexture = std::static_pointer_cast<VulkanTexture>(binding.texture);
+                    auto vkSampler = std::static_pointer_cast<VulkanSampler>(binding.sampler);
+
+                    VkDescriptorImageInfo imageInfo{};
+                    imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                    imageInfo.imageView = vkTexture->GetImageView();
+                    imageInfo.sampler = vkSampler->GetHandle();
+                    imageInfos.push_back(imageInfo);
+
+                    VkWriteDescriptorSet descriptorWrite{};
+                    descriptorWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                    descriptorWrite.dstSet = m_DescriptorSets[i];
+                    descriptorWrite.dstBinding = binding.binding;
+                    descriptorWrite.dstArrayElement = 0;
+                    descriptorWrite.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                    descriptorWrite.descriptorCount = 1;
+                    descriptorWrite.pImageInfo = &imageInfos.back();
+
+                    descriptorWrites.push_back(descriptorWrite);
+                }
             }
         }
 
@@ -123,6 +152,17 @@ void VulkanDescriptorSet::UpdateBuffer(uint32 binding, Ref<Buffer> buffer) {
     for (auto& b : m_Bindings) {
         if (b.binding == binding) {
             b.buffer = buffer;
+            break;
+        }
+    }
+    UpdateSets(m_Bindings);
+}
+
+void VulkanDescriptorSet::UpdateTexture(uint32 binding, Ref<Texture> texture, Ref<Sampler> sampler) {
+    for (auto& b : m_Bindings) {
+        if (b.binding == binding) {
+            b.texture = texture;
+            b.sampler = sampler;
             break;
         }
     }

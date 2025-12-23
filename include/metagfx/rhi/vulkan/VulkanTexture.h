@@ -23,12 +23,17 @@ public:
     uint32 GetWidth() const override { return m_Width; }
     uint32 GetHeight() const override { return m_Height; }
     Format GetFormat() const override { return m_Format; }
-    
+
+    // Upload pixel data to GPU
+    void UploadData(const void* data, uint64 size) override;
+
     // Vulkan-specific
     VkImage GetImage() const { return m_Image; }
     VkImageView GetImageView() const { return m_ImageView; }
 
 private:
+    void TransitionImageLayout(VkImageLayout oldLayout, VkImageLayout newLayout);
+    uint32 FindMemoryType(uint32 typeFilter, VkMemoryPropertyFlags properties);
     VulkanContext& m_Context;
     VkImage m_Image = VK_NULL_HANDLE;
     VkImageView m_ImageView = VK_NULL_HANDLE;

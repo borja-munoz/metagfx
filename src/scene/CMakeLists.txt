@@ -27,6 +27,7 @@ target_include_directories(metagfx_scene
 target_link_libraries(metagfx_scene
     PUBLIC
         metagfx_core
+        metagfx_utils
         glm
         SDL3::SDL3
         assimp

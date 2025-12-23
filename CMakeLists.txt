@@ -43,6 +43,7 @@ add_subdirectory(external)
 # Project modules
 add_subdirectory(src/core)
 add_subdirectory(src/rhi)
+add_subdirectory(src/utils)
 add_subdirectory(src/scene)
 add_subdirectory(src/renderer)
 add_subdirectory(src/app)
