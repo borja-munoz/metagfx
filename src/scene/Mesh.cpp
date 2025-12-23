@@ -2,6 +2,7 @@
 // src/scene/Mesh.cpp
 // ============================================================================
 #include "metagfx/scene/Mesh.h"
+#include "metagfx/scene/Material.h"
 #include "metagfx/rhi/GraphicsDevice.h"
 #include "metagfx/rhi/Types.h"
 #include "metagfx/core/Logger.h"
@@ -21,6 +22,7 @@ Mesh::Mesh(Mesh&& other) noexcept
     , m_IndexBuffer(std::move(other.m_IndexBuffer))
     , m_VertexCount(other.m_VertexCount)
     , m_IndexCount(other.m_IndexCount)
+    , m_Material(std::move(other.m_Material))
 {
     other.m_VertexCount = 0;
     other.m_IndexCount = 0;
@@ -29,14 +31,15 @@ Mesh::Mesh(Mesh&& other) noexcept
 Mesh& Mesh::operator=(Mesh&& other) noexcept {
     if (this != &other) {
         Cleanup();
-        
+
         m_Vertices = std::move(other.m_Vertices);
         m_Indices = std::move(other.m_Indices);
         m_VertexBuffer = std::move(other.m_VertexBuffer);
         m_IndexBuffer = std::move(other.m_IndexBuffer);
         m_VertexCount = other.m_VertexCount;
         m_IndexCount = other.m_IndexCount;
-        
+        m_Material = std::move(other.m_Material);
+
         other.m_VertexCount = 0;
         other.m_IndexCount = 0;
     }
@@ -84,6 +87,11 @@ bool Mesh::Initialize(rhi::GraphicsDevice* device,
     }
     m_IndexBuffer->CopyData(indices.data(), ibDesc.size);
 
+    // Create default material if none is set
+    if (!m_Material) {
+        m_Material = std::make_unique<Material>();
+    }
+
     METAGFX_INFO << "Mesh initialized: " <<  m_VertexCount << " vertices, " << m_IndexCount << " indices";
     return true;
 }
@@ -91,10 +99,15 @@ bool Mesh::Initialize(rhi::GraphicsDevice* device,
 void Mesh::Cleanup() {
     m_VertexBuffer.reset();
     m_IndexBuffer.reset();
+    m_Material.reset();
     m_Vertices.clear();
     m_Indices.clear();
     m_VertexCount = 0;
     m_IndexCount = 0;
+}
+
+void Mesh::SetMaterial(std::unique_ptr<Material> material) {
+    m_Material = std::move(material);
 }
 
 } // namespace metagfx

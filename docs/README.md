@@ -74,6 +74,22 @@ Comprehensive design documentation for model loading (Milestone 2.1):
 
 ---
 
+#### [Material System](material_system.md)
+**Topics**: Material properties and Blinn-Phong lighting
+
+Complete material system design and implementation (Milestone 2.2):
+- Material class with albedo, roughness, metallic properties
+- GPU-compatible std140 layout and descriptor set integration
+- Blinn-Phong lighting model (ambient, diffuse, specular)
+- Roughness-based shininess mapping for intuitive control
+- Assimp material extraction and conversion
+- Per-mesh material ownership and rendering
+- Push constants for camera position
+- Critical bug fixes (vector pointer invalidation, backface culling)
+- Performance analysis and future PBR roadmap
+
+---
+
 ## Project Documentation
 
 ### Root Level Documents
@@ -145,7 +161,8 @@ Per-milestone implementation notes and artifacts:
 **Features**:
 1. [Camera System](camera_transformation_system.md) - Viewport and controls
 2. [Model Loading](model_loading.md) - Asset pipeline
-3. [Roadmap](../claude/metagfx_roadmap.md) - Future features
+3. [Material System](material_system.md) - Materials and lighting
+4. [Roadmap](../claude/metagfx_roadmap.md) - Future features
 
 **Development**:
 1. [CLAUDE.md](../CLAUDE.md) - Development guide
@@ -194,18 +211,19 @@ cd bin
 ```
 
 ### Project Status
-**Current Milestone**: 2.1 (Model Loading with Assimp)
+**Current Milestone**: 2.2 (Basic Material System) ✅ Complete
 **Implemented Features**:
 - ✅ Vulkan backend
 - ✅ Camera system with FPS controls
 - ✅ Model loading (OBJ, FBX, glTF, COLLADA)
 - ✅ Procedural geometry (cube, sphere)
-- ✅ Basic Phong lighting
+- ✅ Material system (albedo, roughness, metallic)
+- ✅ Blinn-Phong lighting (ambient, diffuse, specular)
 
 **Next Milestones**:
-- 2.2: Basic Material System
 - 2.3: Textures and Samplers
 - 3.1: Light System (point, directional, spot)
+- 3.2: Shadow Mapping
 
 ### Key Files
 | File | Purpose |
@@ -242,7 +260,6 @@ Future documentation needs:
 - [ ] D3D12 implementation guide (when implemented)
 - [ ] Metal implementation guide (when implemented)
 - [ ] WebGPU implementation guide (when implemented)
-- [ ] Material system design (Milestone 2.2)
 - [ ] Texture system design (Milestone 2.3)
 - [ ] Lighting system design (Phase 3)
 - [ ] Performance optimization guide

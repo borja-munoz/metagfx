@@ -18,6 +18,8 @@ namespace rhi {
     class Buffer;
 }
 
+class Material;
+
 /**
  * @brief Vertex structure containing position, normal, and texture coordinates
  */
@@ -84,15 +86,21 @@ public:
     const std::vector<Vertex>& GetVertices() const { return m_Vertices; }
     const std::vector<uint32_t>& GetIndices() const { return m_Indices; }
 
+    // Material access
+    void SetMaterial(std::unique_ptr<Material> material);
+    Material* GetMaterial() const { return m_Material.get(); }
+
 private:
     std::vector<Vertex> m_Vertices;
     std::vector<uint32_t> m_Indices;
 
     Ref<rhi::Buffer> m_VertexBuffer;
     Ref<rhi::Buffer> m_IndexBuffer;
-    
+
     uint32_t m_VertexCount = 0;
     uint32_t m_IndexCount = 0;
+
+    std::unique_ptr<Material> m_Material;
 };
 
 } // namespace metagfx

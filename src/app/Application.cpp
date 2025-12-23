@@ -15,6 +15,7 @@
 #include "metagfx/rhi/vulkan/VulkanDescriptorSet.h"
 #include "metagfx/rhi/vulkan/VulkanPipeline.h"
 #include "metagfx/scene/Camera.h"
+#include "metagfx/scene/Material.h"
 #include "metagfx/scene/Mesh.h"
 #include <SDL3/SDL.h>
 #include <glm/glm.hpp>
@@ -91,17 +92,32 @@ void Application::Init() {
     uniformBufferDesc.size = sizeof(UniformBufferObject);
     uniformBufferDesc.usage = BufferUsage::Uniform;
     uniformBufferDesc.memoryUsage = MemoryUsage::CPUToGPU;
-    
+
     m_UniformBuffers[0] = m_Device->CreateBuffer(uniformBufferDesc);
     m_UniformBuffers[1] = m_Device->CreateBuffer(uniformBufferDesc);
+
+    // Create material buffers (double-buffered)
+    BufferDesc materialBufferDesc{};
+    materialBufferDesc.size = sizeof(MaterialProperties);
+    materialBufferDesc.usage = BufferUsage::Uniform;
+    materialBufferDesc.memoryUsage = MemoryUsage::CPUToGPU;
+
+    m_MaterialBuffers[0] = m_Device->CreateBuffer(materialBufferDesc);
+    m_MaterialBuffers[1] = m_Device->CreateBuffer(materialBufferDesc);
     
-    // Create descriptor set
+    // Create descriptor set with 2 bindings (test: does extra binding break it?)
     std::vector<rhi::DescriptorBinding> bindings = {
         {
-            0,  // binding = 0
+            0,  // binding = 0 (MVP matrices)
             VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
             VK_SHADER_STAGE_VERTEX_BIT,
             m_UniformBuffers[0]
+        },
+        {
+            1,  // binding = 1 (Material - not used by shader yet)
+            VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+            VK_SHADER_STAGE_FRAGMENT_BIT,
+            m_MaterialBuffers[0]
         }
     };
     
@@ -109,7 +125,7 @@ void Application::Init() {
         std::static_pointer_cast<rhi::VulkanDevice>(m_Device)->GetContext(),
         bindings
     );
-    
+
     // Set descriptor set layout on device before creating pipeline
     std::static_pointer_cast<rhi::VulkanDevice>(m_Device)->SetDescriptorSetLayout(
         m_DescriptorSet->GetLayout()
@@ -244,7 +260,7 @@ void Application::CreateModelPipeline() {
 
     pipelineDesc.topology = PrimitiveTopology::TriangleList;
     pipelineDesc.rasterization.cullMode = CullMode::Back;
-    pipelineDesc.rasterization.frontFace = FrontFace::CounterClockwise;
+    pipelineDesc.rasterization.frontFace = FrontFace::Clockwise;  // Clockwise because projection Y-flip reverses winding
 
     // Enable depth testing (will be added later, for now just set defaults)
     pipelineDesc.depthStencil.depthTestEnable = false;
@@ -372,7 +388,9 @@ void Application::Render() {
     ubo.view = m_Camera->GetViewMatrix();
     ubo.projection = m_Camera->GetProjectionMatrix();
 
-    m_UniformBuffers[m_CurrentFrame]->CopyData(&ubo, sizeof(ubo));
+    // FIXME: Descriptor sets all point to buffer[0], so always update buffer[0]
+    // TODO: Properly configure double buffering in descriptor sets
+    m_UniformBuffers[0]->CopyData(&ubo, sizeof(ubo));
     
     // Create command buffer
     auto cmd = m_Device->CreateCommandBuffer();
@@ -407,14 +425,25 @@ void Application::Render() {
         // Bind model pipeline
         cmd->BindPipeline(m_ModelPipeline);
 
-        // Bind descriptor set
+        // Bind descriptor set (using set 0, all buffers point to [0])
         auto vkPipeline = std::static_pointer_cast<VulkanPipeline>(m_ModelPipeline);
         vkCmd->BindDescriptorSet(vkPipeline->GetLayout(),
-                                 m_DescriptorSet->GetSet(m_CurrentFrame));
+                                 m_DescriptorSet->GetSet(0));
+
+        // Push camera position for specular lighting
+        glm::vec4 cameraPos(m_Camera->GetPosition(), 1.0f);
+        vkCmd->PushConstants(vkPipeline->GetLayout(),
+                            VK_SHADER_STAGE_FRAGMENT_BIT,
+                            0, sizeof(glm::vec4), &cameraPos);
 
         // Draw all meshes in the model
         for (const auto& mesh : m_Model->GetMeshes()) {
-            if (mesh && mesh->IsValid()) {
+            if (mesh && mesh->IsValid() && mesh->GetMaterial()) {
+                // Update material buffer for this mesh
+                MaterialProperties matProps = mesh->GetMaterial()->GetProperties();
+                m_MaterialBuffers[0]->CopyData(&matProps, sizeof(matProps));
+
+                // Bind and draw
                 cmd->BindVertexBuffer(mesh->GetVertexBuffer());
                 cmd->BindIndexBuffer(mesh->GetIndexBuffer());
                 cmd->DrawIndexed(mesh->GetIndexCount());
@@ -449,6 +478,8 @@ void Application::Shutdown() {
     m_VertexBuffer.reset();
     m_UniformBuffers[0].reset();
     m_UniformBuffers[1].reset();
+    m_MaterialBuffers[0].reset();
+    m_MaterialBuffers[1].reset();
     m_DescriptorSet.reset();
     m_Device.reset();
     

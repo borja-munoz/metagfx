@@ -189,5 +189,10 @@ void VulkanCommandBuffer::BindDescriptorSet(VkPipelineLayout layout, VkDescripto
                            layout, 0, 1, &descriptorSet, 0, nullptr);
 }
 
+void VulkanCommandBuffer::PushConstants(VkPipelineLayout layout, VkShaderStageFlags stageFlags,
+                                       uint32 offset, uint32 size, const void* data) {
+    vkCmdPushConstants(m_CommandBuffer, layout, stageFlags, offset, size, data);
+}
+
 } // namespace rhi
 } // namespace metagfx

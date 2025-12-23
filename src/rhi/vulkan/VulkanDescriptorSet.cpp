@@ -85,17 +85,21 @@ void VulkanDescriptorSet::UpdateSets(const std::vector<DescriptorBinding>& bindi
     for (uint32 i = 0; i < MAX_FRAMES; i++) {
         std::vector<VkWriteDescriptorSet> descriptorWrites;
         std::vector<VkDescriptorBufferInfo> bufferInfos;
-        
+
+        // Reserve space to prevent reallocation (which would invalidate pointers)
+        bufferInfos.reserve(bindings.size());
+        descriptorWrites.reserve(bindings.size());
+
         for (const auto& binding : bindings) {
             if (binding.buffer) {
                 auto vkBuffer = std::static_pointer_cast<VulkanBuffer>(binding.buffer);
-                
+
                 VkDescriptorBufferInfo bufferInfo{};
                 bufferInfo.buffer = vkBuffer->GetHandle();
                 bufferInfo.offset = 0;
                 bufferInfo.range = vkBuffer->GetSize();
                 bufferInfos.push_back(bufferInfo);
-                
+
                 VkWriteDescriptorSet descriptorWrite{};
                 descriptorWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
                 descriptorWrite.dstSet = m_DescriptorSets[i];
@@ -104,13 +108,13 @@ void VulkanDescriptorSet::UpdateSets(const std::vector<DescriptorBinding>& bindi
                 descriptorWrite.descriptorType = binding.type;
                 descriptorWrite.descriptorCount = 1;
                 descriptorWrite.pBufferInfo = &bufferInfos.back();
-                
+
                 descriptorWrites.push_back(descriptorWrite);
             }
         }
-        
-        vkUpdateDescriptorSets(m_Context.device, 
-                              static_cast<uint32>(descriptorWrites.size()), 
+
+        vkUpdateDescriptorSets(m_Context.device,
+                              static_cast<uint32>(descriptorWrites.size()),
                               descriptorWrites.data(), 0, nullptr);
     }
 }

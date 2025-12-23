@@ -44,6 +44,10 @@ public:
     // Bind descriptor set
     void BindDescriptorSet(VkPipelineLayout layout, VkDescriptorSet descriptorSet);
 
+    // Push constants
+    void PushConstants(VkPipelineLayout layout, VkShaderStageFlags stageFlags,
+                      uint32 offset, uint32 size, const void* data);
+
 private:
     VulkanContext& m_Context;
     VkCommandPool m_CommandPool;

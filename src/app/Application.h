@@ -70,7 +70,8 @@ private:
         glm::mat4 projection;
     };
     
-    Ref<rhi::Buffer> m_UniformBuffers[2];  // Double buffering
+    Ref<rhi::Buffer> m_UniformBuffers[2];  // Double buffering for MVP
+    Ref<rhi::Buffer> m_MaterialBuffers[2];  // Double buffering for material
     std::unique_ptr<rhi::VulkanDescriptorSet> m_DescriptorSet;
     uint32 m_CurrentFrame = 0;
 

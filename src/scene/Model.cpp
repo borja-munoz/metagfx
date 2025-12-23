@@ -2,6 +2,7 @@
 // src/scene/Model.cpp
 // ============================================================================
 #include "metagfx/scene/Model.h"
+#include "metagfx/scene/Material.h"
 #include "metagfx/rhi/GraphicsDevice.h"
 #include "metagfx/rhi/Types.h"
 #include "metagfx/core/Logger.h"
@@ -35,8 +36,36 @@ Model& Model::operator=(Model&& other) noexcept {
     return *this;
 }
 
+// Helper function to extract material from Assimp
+static std::unique_ptr<Material> ProcessMaterial(const aiMaterial* aiMat) {
+    if (!aiMat) {
+        return std::make_unique<Material>();  // Return default material
+    }
+
+    // Extract diffuse color → albedo
+    aiColor3D diffuse(0.8f, 0.8f, 0.8f);
+    aiMat->Get(AI_MATKEY_COLOR_DIFFUSE, diffuse);
+
+    // Extract shininess → roughness (inverse relationship)
+    float shininess = 32.0f;
+    aiMat->Get(AI_MATKEY_SHININESS, shininess);
+
+    // Convert shininess to roughness (inverse mapping)
+    // High shininess (256) = low roughness (0), Low shininess (0) = high roughness (1)
+    float roughness = 1.0f - glm::clamp(shininess / 256.0f, 0.0f, 1.0f);
+
+    // Metallic defaults to 0.0 (no metallic data in basic formats like OBJ)
+    float metallic = 0.0f;
+
+    return std::make_unique<Material>(
+        glm::vec3(diffuse.r, diffuse.g, diffuse.b),
+        roughness,
+        metallic
+    );
+}
+
 // Helper function to process an Assimp mesh
-static std::unique_ptr<Mesh> ProcessMesh(rhi::GraphicsDevice* device, aiMesh* aiMesh) {
+static std::unique_ptr<Mesh> ProcessMesh(rhi::GraphicsDevice* device, aiMesh* aiMesh, const aiScene* scene) {
     std::vector<Vertex> vertices;
     std::vector<uint32_t> indices;
 
@@ -91,6 +120,16 @@ static std::unique_ptr<Mesh> ProcessMesh(rhi::GraphicsDevice* device, aiMesh* ai
         return nullptr;
     }
 
+    // Extract and attach material
+    if (scene && aiMesh->mMaterialIndex >= 0 && aiMesh->mMaterialIndex < scene->mNumMaterials) {
+        aiMaterial* aiMat = scene->mMaterials[aiMesh->mMaterialIndex];
+        auto material = ProcessMaterial(aiMat);
+        mesh->SetMaterial(std::move(material));
+    } else {
+        // Fallback to default material
+        mesh->SetMaterial(std::make_unique<Material>());
+    }
+
     return mesh;
 }
 
@@ -100,7 +139,7 @@ static void ProcessNode(rhi::GraphicsDevice* device, aiNode* node, const aiScene
     // Process all meshes in this node
     for (uint32_t i = 0; i < node->mNumMeshes; ++i) {
         aiMesh* aiMesh = scene->mMeshes[node->mMeshes[i]];
-        auto mesh = ProcessMesh(device, aiMesh);
+        auto mesh = ProcessMesh(device, aiMesh, scene);
         if (mesh) {
             meshes.push_back(std::move(mesh));
         }
@@ -222,6 +261,13 @@ bool Model::CreateCube(rhi::GraphicsDevice* device, float size) {
         return false;
     }
 
+    // Set default material for cube (white, slightly shiny)
+    mesh->SetMaterial(std::make_unique<Material>(
+        glm::vec3(1.0f, 1.0f, 1.0f),  // albedo: white
+        0.3f,                          // roughness: smooth
+        0.0f                           // metallic: non-metallic
+    ));
+
     m_Meshes.push_back(std::move(mesh));
     m_FilePath = "procedural_cube";
     return true;
@@ -280,6 +326,13 @@ bool Model::CreateSphere(rhi::GraphicsDevice* device, float radius, uint32_t seg
         METAGFX_ERROR << "Failed to create sphere mesh";
         return false;
     }
+
+    // Set default material for sphere (light gray, medium roughness)
+    mesh->SetMaterial(std::make_unique<Material>(
+        glm::vec3(0.8f, 0.8f, 0.8f),  // albedo: light gray
+        0.5f,                          // roughness: medium
+        0.0f                           // metallic: non-metallic
+    ));
 
     m_Meshes.push_back(std::move(mesh));
     m_FilePath = "procedural_sphere";
