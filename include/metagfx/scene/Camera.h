@@ -39,7 +39,14 @@ public:
     void ProcessKeyboard(int key, float deltaTime);
     void ProcessMouseMovement(float xoffset, float yoffset, bool constrainPitch = true);
     void ProcessMouseScroll(float yoffset);
-    
+
+    // Orbital camera controls
+    void SetOrbitTarget(const glm::vec3& target);
+    void OrbitAroundTarget(float deltaYaw, float deltaPitch);
+    void ZoomToTarget(float delta);
+    const glm::vec3& GetOrbitTarget() const { return m_OrbitTarget; }
+    float GetOrbitDistance() const { return m_OrbitDistance; }
+
     // Getters
     const glm::mat4& GetViewMatrix() const { return m_ViewMatrix; }
     const glm::mat4& GetProjectionMatrix() const { return m_ProjectionMatrix; }
@@ -87,7 +94,13 @@ private:
     float m_MovementSpeed = 2.5f;
     float m_MouseSensitivity = 0.5f;  // Increased from 0.1 for better click-and-drag responsiveness
     float m_ZoomSensitivity = 1.0f;
-    
+
+    // Orbital camera state
+    glm::vec3 m_OrbitTarget = glm::vec3(0.0f, 0.0f, 0.0f);  // Point to orbit around
+    float m_OrbitDistance = 5.0f;  // Distance from target
+    float m_OrbitYaw = 0.0f;       // Horizontal angle around target
+    float m_OrbitPitch = 0.0f;     // Vertical angle around target
+
     // Matrices
     glm::mat4 m_ViewMatrix = glm::mat4(1.0f);
     glm::mat4 m_ProjectionMatrix = glm::mat4(1.0f);

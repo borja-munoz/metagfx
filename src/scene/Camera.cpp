@@ -149,10 +149,87 @@ void Camera::UpdateVectors() {
     front.y = sin(glm::radians(m_Pitch));
     front.z = sin(glm::radians(m_Yaw)) * cos(glm::radians(m_Pitch));
     m_Front = glm::normalize(front);
-    
+
     // Re-calculate the right and up vectors
     m_Right = glm::normalize(glm::cross(m_Front, m_WorldUp));
     m_Up = glm::normalize(glm::cross(m_Right, m_Front));
+}
+
+// ============================================================================
+// Orbital Camera Controls
+// ============================================================================
+
+void Camera::SetOrbitTarget(const glm::vec3& target) {
+    m_OrbitTarget = target;
+
+    // Calculate current distance and angles from position to target
+    glm::vec3 offset = m_Position - m_OrbitTarget;
+    m_OrbitDistance = glm::length(offset);
+
+    if (m_OrbitDistance > 0.001f) {
+        glm::vec3 direction = glm::normalize(offset);
+        m_OrbitPitch = glm::degrees(asin(direction.y));
+        m_OrbitYaw = glm::degrees(atan2(direction.z, direction.x));
+    }
+
+    // Update view to look at target
+    LookAt(m_OrbitTarget);
+}
+
+void Camera::OrbitAroundTarget(float deltaYaw, float deltaPitch) {
+    // Update orbital angles
+    m_OrbitYaw += deltaYaw * m_MouseSensitivity;
+    m_OrbitPitch += deltaPitch * m_MouseSensitivity;
+
+    // Constrain pitch to prevent flipping
+    if (m_OrbitPitch > 89.0f)
+        m_OrbitPitch = 89.0f;
+    if (m_OrbitPitch < -89.0f)
+        m_OrbitPitch = -89.0f;
+
+    // Calculate new camera position in spherical coordinates
+    float yawRad = glm::radians(m_OrbitYaw);
+    float pitchRad = glm::radians(m_OrbitPitch);
+
+    glm::vec3 offset;
+    offset.x = m_OrbitDistance * cos(pitchRad) * cos(yawRad);
+    offset.y = m_OrbitDistance * sin(pitchRad);
+    offset.z = m_OrbitDistance * cos(pitchRad) * sin(yawRad);
+
+    m_Position = m_OrbitTarget + offset;
+
+    // Update view matrix to look at target
+    m_ViewMatrix = glm::lookAt(m_Position, m_OrbitTarget, m_WorldUp);
+
+    // Update camera vectors
+    m_Front = glm::normalize(m_OrbitTarget - m_Position);
+    m_Right = glm::normalize(glm::cross(m_Front, m_WorldUp));
+    m_Up = glm::normalize(glm::cross(m_Right, m_Front));
+}
+
+void Camera::ZoomToTarget(float delta) {
+    // Adjust orbit distance
+    m_OrbitDistance -= delta * m_ZoomSensitivity;
+
+    // Clamp distance to reasonable values
+    if (m_OrbitDistance < 1.0f)
+        m_OrbitDistance = 1.0f;
+    if (m_OrbitDistance > 100.0f)
+        m_OrbitDistance = 100.0f;
+
+    // Recalculate position with new distance
+    float yawRad = glm::radians(m_OrbitYaw);
+    float pitchRad = glm::radians(m_OrbitPitch);
+
+    glm::vec3 offset;
+    offset.x = m_OrbitDistance * cos(pitchRad) * cos(yawRad);
+    offset.y = m_OrbitDistance * sin(pitchRad);
+    offset.z = m_OrbitDistance * cos(pitchRad) * sin(yawRad);
+
+    m_Position = m_OrbitTarget + offset;
+
+    // Update view matrix
+    m_ViewMatrix = glm::lookAt(m_Position, m_OrbitTarget, m_WorldUp);
 }
 
 } // namespace metagfx

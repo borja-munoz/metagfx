@@ -83,8 +83,9 @@ void Application::Init() {
         0.1f,
         100.0f
     );
-    // Position camera further back for better orbit view of the model
+    // Set up orbital camera centered on origin
     m_Camera->SetPosition(glm::vec3(0.0f, 1.0f, 8.0f));
+    m_Camera->SetOrbitTarget(glm::vec3(0.0f, 0.0f, 0.0f));  // Orbit around model center
 
     // Don't enable relative mouse mode - we use click-and-drag instead
     // SDL_SetWindowRelativeMouseMode(m_Window, false);
@@ -547,12 +548,14 @@ void Application::ProcessEvents() {
                     m_LastX = static_cast<float>(event.motion.x);
                     m_LastY = static_cast<float>(event.motion.y);
 
-                    m_Camera->ProcessMouseMovement(xoffset, yoffset);
+                    // Use orbital camera rotation around target point
+                    m_Camera->OrbitAroundTarget(xoffset, yoffset);
                 }
                 break;
 
             case SDL_EVENT_MOUSE_WHEEL:
-                m_Camera->ProcessMouseScroll(static_cast<float>(event.wheel.y));
+                // Use zoom instead of scroll for orbital camera
+                m_Camera->ZoomToTarget(static_cast<float>(event.wheel.y));
                 break;
                 
             case SDL_EVENT_WINDOW_RESIZED:
