@@ -38,8 +38,68 @@ Model& Model::operator=(Model&& other) noexcept {
     return *this;
 }
 
+// Helper function to load texture (handles both embedded and external textures)
+static Ref<rhi::Texture> LoadTextureFromAssimp(rhi::GraphicsDevice* device,
+                                                const aiScene* scene,
+                                                const std::string& texPath,
+                                                const std::string& modelDir,
+                                                bool useSRGB = false) {
+    // Determine format: SRGB for albedo/diffuse, UNORM for data textures (normal, metallic, roughness, AO)
+    rhi::Format format = useSRGB ? rhi::Format::R8G8B8A8_SRGB : rhi::Format::R8G8B8A8_UNORM;
+
+    // Check if this is an embedded texture (path starts with '*')
+    if (texPath[0] == '*') {
+        // Embedded texture: extract index
+        int textureIndex = std::atoi(texPath.c_str() + 1);
+
+        if (textureIndex >= 0 && static_cast<unsigned int>(textureIndex) < scene->mNumTextures) {
+            const aiTexture* embeddedTex = scene->mTextures[textureIndex];
+
+            // Check if texture is compressed (mHeight == 0) or uncompressed
+            if (embeddedTex->mHeight == 0) {
+                // Compressed texture (PNG, JPG, etc.)
+                utils::ImageData imageData = utils::LoadImageFromMemory(
+                    reinterpret_cast<const uint8_t*>(embeddedTex->pcData),
+                    embeddedTex->mWidth  // mWidth stores the data size for compressed textures
+                );
+
+                return utils::CreateTextureFromImage(device, imageData, format);
+            } else {
+                // Uncompressed texture (raw RGBA data)
+                utils::ImageData imageData{
+                    reinterpret_cast<uint8_t*>(embeddedTex->pcData),
+                    embeddedTex->mWidth,
+                    embeddedTex->mHeight,
+                    4  // RGBA
+                };
+
+                return utils::CreateTextureFromImage(device, imageData, format);
+            }
+        } else {
+            METAGFX_WARN << "Invalid embedded texture index: " << textureIndex;
+            return nullptr;
+        }
+    } else {
+        // External texture file
+        std::filesystem::path fullPath = std::filesystem::path(modelDir) / texPath;
+
+        // For external files, we need to create texture with correct format
+        utils::ImageData imageData = utils::LoadImage(fullPath.string(), 4);
+        if (!imageData.pixels) {
+            METAGFX_ERROR << "Failed to load texture from: " << fullPath;
+            return nullptr;
+        }
+
+        auto texture = utils::CreateTextureFromImage(device, imageData, format);
+        utils::FreeImage(imageData);
+
+        return texture;
+    }
+}
+
 // Helper function to extract material from Assimp
 static std::unique_ptr<Material> ProcessMaterial(rhi::GraphicsDevice* device,
+                                                  const aiScene* scene,
                                                   const aiMaterial* aiMat,
                                                   const std::string& modelDir) {
     if (!aiMat) {
@@ -68,21 +128,115 @@ static std::unique_ptr<Material> ProcessMaterial(rhi::GraphicsDevice* device,
         metallic
     );
 
+    METAGFX_INFO << "Material properties: albedo=(" << diffuse.r << ", " << diffuse.g << ", " << diffuse.b
+                 << "), roughness=" << roughness << ", metallic=" << metallic;
+
     // Extract albedo/diffuse texture
     if (aiMat->GetTextureCount(aiTextureType_DIFFUSE) > 0) {
         aiString texPath;
         if (aiMat->GetTexture(aiTextureType_DIFFUSE, 0, &texPath) == AI_SUCCESS) {
-            // Resolve path relative to model directory
-            std::filesystem::path fullPath = std::filesystem::path(modelDir) / texPath.C_Str();
-
             try {
-                auto texture = utils::LoadTexture(device, fullPath.string());
+                auto texture = LoadTextureFromAssimp(device, scene, texPath.C_Str(), modelDir, true);  // Use SRGB for albedo
                 if (texture) {
                     material->SetAlbedoMap(texture);
-                    METAGFX_INFO << "Loaded albedo texture: " << fullPath.string();
+                    METAGFX_INFO << "Loaded albedo texture: " << texPath.C_Str();
                 }
             } catch (const std::exception& e) {
-                METAGFX_WARN << "Failed to load texture: " << fullPath.string() << " - " << e.what();
+                METAGFX_WARN << "Failed to load albedo texture: " << texPath.C_Str() << " - " << e.what();
+            }
+        }
+    }
+
+    // Extract normal map
+    if (aiMat->GetTextureCount(aiTextureType_NORMALS) > 0) {
+        aiString texPath;
+        if (aiMat->GetTexture(aiTextureType_NORMALS, 0, &texPath) == AI_SUCCESS) {
+            try {
+                auto texture = LoadTextureFromAssimp(device, scene, texPath.C_Str(), modelDir);
+                if (texture) {
+                    material->SetNormalMap(texture);
+                    METAGFX_INFO << "Loaded normal map: " << texPath.C_Str();
+                }
+            } catch (const std::exception& e) {
+                METAGFX_WARN << "Failed to load normal map: " << texPath.C_Str() << " - " << e.what();
+            }
+        }
+    }
+
+    // Extract metallic-roughness map (glTF workflow)
+    // For glTF models, Assimp provides the combined metallic-roughness texture via aiTextureType_METALNESS
+    // glTF format: G channel = roughness, B channel = metallic
+    bool hasMetallicRoughness = false;
+    if (aiMat->GetTextureCount(aiTextureType_METALNESS) > 0) {
+        aiString texPath;
+        if (aiMat->GetTexture(aiTextureType_METALNESS, 0, &texPath) == AI_SUCCESS) {
+            try {
+                auto texture = LoadTextureFromAssimp(device, scene, texPath.C_Str(), modelDir);
+                if (texture) {
+                    // Treat as combined metallic-roughness texture for glTF
+                    material->SetMetallicRoughnessMap(texture);
+                    hasMetallicRoughness = true;
+                    METAGFX_INFO << "Loaded metallic-roughness map (glTF): " << texPath.C_Str();
+                }
+            } catch (const std::exception& e) {
+                METAGFX_WARN << "Failed to load metallic-roughness map: " << texPath.C_Str() << " - " << e.what();
+            }
+        }
+    }
+
+    // Extract separate roughness map (non-glTF workflows only if we don't have combined texture)
+    if (!hasMetallicRoughness && aiMat->GetTextureCount(aiTextureType_DIFFUSE_ROUGHNESS) > 0) {
+        aiString texPath;
+        if (aiMat->GetTexture(aiTextureType_DIFFUSE_ROUGHNESS, 0, &texPath) == AI_SUCCESS) {
+            try {
+                auto texture = LoadTextureFromAssimp(device, scene, texPath.C_Str(), modelDir);
+                if (texture) {
+                    material->SetRoughnessMap(texture);
+                    METAGFX_INFO << "Loaded roughness map: " << texPath.C_Str();
+                }
+            } catch (const std::exception& e) {
+                METAGFX_WARN << "Failed to load roughness map: " << texPath.C_Str() << " - " << e.what();
+            }
+        }
+    }
+
+    // Extract ambient occlusion map
+    if (aiMat->GetTextureCount(aiTextureType_AMBIENT_OCCLUSION) > 0) {
+        aiString texPath;
+        if (aiMat->GetTexture(aiTextureType_AMBIENT_OCCLUSION, 0, &texPath) == AI_SUCCESS) {
+            try {
+                auto texture = LoadTextureFromAssimp(device, scene, texPath.C_Str(), modelDir);
+                if (texture) {
+                    material->SetAOMap(texture);
+                    METAGFX_INFO << "Loaded AO map: " << texPath.C_Str();
+                }
+            } catch (const std::exception& e) {
+                METAGFX_WARN << "Failed to load AO map: " << texPath.C_Str() << " - " << e.what();
+            }
+        }
+    }
+
+    // Extract combined metallic-roughness map (glTF standard)
+    // In glTF: R channel is unused/occlusion, G is roughness, B is metallic
+    if (aiMat->GetTextureCount(aiTextureType_UNKNOWN) > 0) {
+        aiString texPath;
+        if (aiMat->GetTexture(aiTextureType_UNKNOWN, 0, &texPath) == AI_SUCCESS) {
+            std::string pathStr = texPath.C_Str();
+            // Check if this might be a combined metallic-roughness texture
+            if (pathStr.find("metallicRoughness") != std::string::npos ||
+                pathStr.find("MetallicRoughness") != std::string::npos ||
+                pathStr.find("metallic_roughness") != std::string::npos ||
+                pathStr[0] == '*') {  // Embedded textures in glTF are often metallic-roughness
+
+                try {
+                    auto texture = LoadTextureFromAssimp(device, scene, pathStr, modelDir);
+                    if (texture) {
+                        material->SetMetallicRoughnessMap(texture);
+                        METAGFX_INFO << "Loaded combined metallic-roughness map: " << pathStr;
+                    }
+                } catch (const std::exception& e) {
+                    METAGFX_WARN << "Failed to load metallic-roughness map: " << pathStr << " - " << e.what();
+                }
             }
         }
     }
@@ -150,7 +304,7 @@ static std::unique_ptr<Mesh> ProcessMesh(rhi::GraphicsDevice* device, aiMesh* ai
     // Extract and attach material
     if (scene && aiMesh->mMaterialIndex >= 0 && aiMesh->mMaterialIndex < scene->mNumMaterials) {
         aiMaterial* aiMat = scene->mMaterials[aiMesh->mMaterialIndex];
-        auto material = ProcessMaterial(device, aiMat, modelDir);
+        auto material = ProcessMaterial(device, scene, aiMat, modelDir);
         mesh->SetMaterial(std::move(material));
     } else {
         // Fallback to default material

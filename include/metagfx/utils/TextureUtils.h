@@ -22,6 +22,9 @@ struct ImageData {
 // desiredChannels: Number of channels to force (0 = use image's channels, 4 = force RGBA)
 ImageData LoadImage(const std::string& filepath, int desiredChannels = 4);
 
+// Load image from memory buffer (for embedded textures)
+ImageData LoadImageFromMemory(const uint8* buffer, uint32 bufferSize, int desiredChannels = 4);
+
 // Free stb_image data
 void FreeImage(ImageData& data);
 

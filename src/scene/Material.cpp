@@ -43,4 +43,54 @@ void Material::SetAlbedoMap(Ref<rhi::Texture> texture) {
     }
 }
 
+void Material::SetNormalMap(Ref<rhi::Texture> texture) {
+    m_NormalMap = texture;
+
+    if (texture) {
+        m_TextureFlags |= static_cast<uint32>(MaterialTextureFlags::HasNormalMap);
+    } else {
+        m_TextureFlags &= ~static_cast<uint32>(MaterialTextureFlags::HasNormalMap);
+    }
+}
+
+void Material::SetMetallicMap(Ref<rhi::Texture> texture) {
+    m_MetallicMap = texture;
+
+    if (texture) {
+        m_TextureFlags |= static_cast<uint32>(MaterialTextureFlags::HasMetallicMap);
+    } else {
+        m_TextureFlags &= ~static_cast<uint32>(MaterialTextureFlags::HasMetallicMap);
+    }
+}
+
+void Material::SetRoughnessMap(Ref<rhi::Texture> texture) {
+    m_RoughnessMap = texture;
+
+    if (texture) {
+        m_TextureFlags |= static_cast<uint32>(MaterialTextureFlags::HasRoughnessMap);
+    } else {
+        m_TextureFlags &= ~static_cast<uint32>(MaterialTextureFlags::HasRoughnessMap);
+    }
+}
+
+void Material::SetMetallicRoughnessMap(Ref<rhi::Texture> texture) {
+    m_MetallicRoughnessMap = texture;
+
+    if (texture) {
+        m_TextureFlags |= static_cast<uint32>(MaterialTextureFlags::HasMetallicRoughnessMap);
+    } else {
+        m_TextureFlags &= ~static_cast<uint32>(MaterialTextureFlags::HasMetallicRoughnessMap);
+    }
+}
+
+void Material::SetAOMap(Ref<rhi::Texture> texture) {
+    m_AOMap = texture;
+
+    if (texture) {
+        m_TextureFlags |= static_cast<uint32>(MaterialTextureFlags::HasAOMap);
+    } else {
+        m_TextureFlags &= ~static_cast<uint32>(MaterialTextureFlags::HasAOMap);
+    }
+}
+
 } // namespace metagfx

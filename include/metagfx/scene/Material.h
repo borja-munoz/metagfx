@@ -13,10 +13,15 @@ namespace rhi {
     class Texture;
 }
 
-// Material texture flags
+// Material texture flags (bit flags for shader)
 enum class MaterialTextureFlags : uint32 {
     None = 0,
-    HasAlbedoMap = 1 << 0
+    HasAlbedoMap = 1 << 0,              // Bit 0: Albedo/base color texture
+    HasNormalMap = 1 << 1,              // Bit 1: Normal map (tangent space)
+    HasMetallicMap = 1 << 2,            // Bit 2: Metallic texture (grayscale)
+    HasRoughnessMap = 1 << 3,           // Bit 3: Roughness texture (grayscale)
+    HasMetallicRoughnessMap = 1 << 4,   // Bit 4: Combined metallic-roughness (glTF: G=roughness, B=metallic)
+    HasAOMap = 1 << 5                   // Bit 5: Ambient occlusion map (grayscale)
 };
 
 // GPU-side structure (std140 layout compatible)
@@ -50,11 +55,40 @@ public:
     void SetAlbedoMap(Ref<rhi::Texture> texture);
     Ref<rhi::Texture> GetAlbedoMap() const { return m_AlbedoMap; }
     bool HasAlbedoMap() const { return (m_TextureFlags & static_cast<uint32>(MaterialTextureFlags::HasAlbedoMap)) != 0; }
+
+    void SetNormalMap(Ref<rhi::Texture> texture);
+    Ref<rhi::Texture> GetNormalMap() const { return m_NormalMap; }
+    bool HasNormalMap() const { return (m_TextureFlags & static_cast<uint32>(MaterialTextureFlags::HasNormalMap)) != 0; }
+
+    void SetMetallicMap(Ref<rhi::Texture> texture);
+    Ref<rhi::Texture> GetMetallicMap() const { return m_MetallicMap; }
+    bool HasMetallicMap() const { return (m_TextureFlags & static_cast<uint32>(MaterialTextureFlags::HasMetallicMap)) != 0; }
+
+    void SetRoughnessMap(Ref<rhi::Texture> texture);
+    Ref<rhi::Texture> GetRoughnessMap() const { return m_RoughnessMap; }
+    bool HasRoughnessMap() const { return (m_TextureFlags & static_cast<uint32>(MaterialTextureFlags::HasRoughnessMap)) != 0; }
+
+    void SetMetallicRoughnessMap(Ref<rhi::Texture> texture);
+    Ref<rhi::Texture> GetMetallicRoughnessMap() const { return m_MetallicRoughnessMap; }
+    bool HasMetallicRoughnessMap() const { return (m_TextureFlags & static_cast<uint32>(MaterialTextureFlags::HasMetallicRoughnessMap)) != 0; }
+
+    void SetAOMap(Ref<rhi::Texture> texture);
+    Ref<rhi::Texture> GetAOMap() const { return m_AOMap; }
+    bool HasAOMap() const { return (m_TextureFlags & static_cast<uint32>(MaterialTextureFlags::HasAOMap)) != 0; }
+
     uint32 GetTextureFlags() const { return m_TextureFlags; }
 
 private:
     MaterialProperties m_Properties;
+
+    // PBR texture maps
     Ref<rhi::Texture> m_AlbedoMap;
+    Ref<rhi::Texture> m_NormalMap;
+    Ref<rhi::Texture> m_MetallicMap;
+    Ref<rhi::Texture> m_RoughnessMap;
+    Ref<rhi::Texture> m_MetallicRoughnessMap;  // Combined texture (glTF standard)
+    Ref<rhi::Texture> m_AOMap;
+
     uint32 m_TextureFlags = 0;
 };
 

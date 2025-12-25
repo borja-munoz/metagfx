@@ -21,7 +21,7 @@ int main(int argc, char* argv[]) {
     // Create and run application
     {
         metagfx::ApplicationConfig config;
-        config.title = "MetaGFX - Milestone 1.4";
+        config.title = "MetaGFX";
         config.width = 1280;
         config.height = 720;
         config.vsync = true;

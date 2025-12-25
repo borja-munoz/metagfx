@@ -83,10 +83,11 @@ void Application::Init() {
         0.1f,
         100.0f
     );
-    m_Camera->SetPosition(glm::vec3(0.0f, 0.0f, 3.0f));
+    // Position camera further back for better orbit view of the model
+    m_Camera->SetPosition(glm::vec3(0.0f, 1.0f, 8.0f));
 
-    // Enable relative mouse mode for camera by default
-    SDL_SetWindowRelativeMouseMode(m_Window, true);
+    // Don't enable relative mouse mode - we use click-and-drag instead
+    // SDL_SetWindowRelativeMouseMode(m_Window, false);
     
     // Create uniform buffers (before creating pipeline)
     using namespace rhi;
@@ -146,6 +147,20 @@ void Application::Init() {
         m_Device.get(), checkerboardImage, rhi::Format::R8G8B8A8_UNORM
     );
 
+    // Create default normal map (1x1, pointing up: RGB(128, 128, 255) = normal(0,0,1) in tangent space)
+    uint8_t normalPixel[4] = {128, 128, 255, 255};  // RGBA
+    utils::ImageData normalImage{normalPixel, 1, 1, 4};
+    m_DefaultNormalMap = utils::CreateTextureFromImage(
+        m_Device.get(), normalImage, rhi::Format::R8G8B8A8_UNORM
+    );
+
+    // Create default white texture (1x1 white pixel) - for missing metallic/roughness/AO
+    uint8_t whitePixel[4] = {255, 255, 255, 255};  // RGBA white
+    utils::ImageData whiteImage{whitePixel, 1, 1, 4};
+    m_DefaultWhiteTexture = utils::CreateTextureFromImage(
+        m_Device.get(), whiteImage, rhi::Format::R8G8B8A8_UNORM
+    );
+
     // Create scene and initialize light buffer
     m_Scene = std::make_unique<Scene>();
     m_Scene->InitializeLightBuffer(m_Device.get());
@@ -153,7 +168,7 @@ void Application::Init() {
     // Create test lights
     CreateTestLights();
 
-    // Create descriptor set with 4 bindings
+    // Create descriptor set with 8 bindings (Phase 2: PBR textures)
     std::vector<rhi::DescriptorBinding> bindings = {
         {
             0,  // binding = 0 (MVP matrices)
@@ -186,6 +201,38 @@ void Application::Init() {
             m_Scene->GetLightBuffer(),
             nullptr,  // texture
             nullptr   // sampler
+        },
+        {
+            4,  // binding = 4 (Normal map)
+            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+            VK_SHADER_STAGE_FRAGMENT_BIT,
+            nullptr,  // buffer
+            m_DefaultNormalMap,
+            m_LinearRepeatSampler
+        },
+        {
+            5,  // binding = 5 (Metallic map)
+            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+            VK_SHADER_STAGE_FRAGMENT_BIT,
+            nullptr,  // buffer
+            m_DefaultWhiteTexture,
+            m_LinearRepeatSampler
+        },
+        {
+            6,  // binding = 6 (Roughness map)
+            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+            VK_SHADER_STAGE_FRAGMENT_BIT,
+            nullptr,  // buffer
+            m_DefaultWhiteTexture,
+            m_LinearRepeatSampler
+        },
+        {
+            7,  // binding = 7 (AO map)
+            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+            VK_SHADER_STAGE_FRAGMENT_BIT,
+            nullptr,  // buffer
+            m_DefaultWhiteTexture,
+            m_LinearRepeatSampler
         }
     };
     
@@ -205,58 +252,90 @@ void Application::Init() {
     // Create model pipeline
     CreateModelPipeline();
 
-    // Load bunny model with texture coordinates
+    // Initialize available models list
+    m_AvailableModels = {
+        "/Users/Borja/dev/borja-munoz/metagfx/assets/models/DamagedHelmet.glb",
+        "/Users/Borja/dev/borja-munoz/metagfx/assets/models/MetalRoughSpheres.glb",
+        "/Users/Borja/dev/borja-munoz/metagfx/assets/models/bunny_tex_coords.obj",
+        "/Users/Borja/dev/borja-munoz/metagfx/assets/models/bunny.obj"
+    };
+    m_CurrentModelIndex = 0;
+
+    // Load initial model
+    LoadModel(m_AvailableModels[m_CurrentModelIndex]);
+
+    METAGFX_INFO << "Controls:";
+    METAGFX_INFO << "  WASD/QE - Camera movement";
+    METAGFX_INFO << "  Mouse drag - Rotate camera";
+    METAGFX_INFO << "  1-4 - Load specific model";
+    METAGFX_INFO << "  N - Next model";
+    METAGFX_INFO << "  P - Previous model";
+    METAGFX_INFO << "  ESC - Exit";
+    m_Running = true;
+}
+
+void Application::LoadModel(const std::string& path) {
+    METAGFX_INFO << "Loading model: " << path;
+
     m_Model = std::make_unique<Model>();
-    if (!m_Model->LoadFromFile(m_Device.get(), "../../assets/models/bunny_tex_coords.obj")) {
-        METAGFX_WARN << "Failed to load bunny_tex_coords.obj, falling back to procedural cube";
+    if (!m_Model->LoadFromFile(m_Device.get(), path)) {
+        METAGFX_WARN << "Failed to load " << path << ", creating fallback cube";
         if (!m_Model->CreateCube(m_Device.get(), 1.0f)) {
             METAGFX_ERROR << "Failed to create fallback cube model";
+            m_Model = nullptr;
             return;
         }
     }
 
-    METAGFX_INFO << "Model loaded successfully";
-    METAGFX_INFO << "Controls: WASD to move, QE for up/down, Mouse to look, C to toggle camera, ESC to exit";
-    m_Running = true;
+    // Extract model name from path for display
+    size_t lastSlash = path.find_last_of("/\\");
+    std::string modelName = (lastSlash != std::string::npos) ? path.substr(lastSlash + 1) : path;
+    METAGFX_INFO << "Model loaded: " << modelName;
+}
+
+void Application::LoadNextModel() {
+    m_CurrentModelIndex = (m_CurrentModelIndex + 1) % m_AvailableModels.size();
+    LoadModel(m_AvailableModels[m_CurrentModelIndex]);
+}
+
+void Application::LoadPreviousModel() {
+    m_CurrentModelIndex = (m_CurrentModelIndex - 1 + m_AvailableModels.size()) % m_AvailableModels.size();
+    LoadModel(m_AvailableModels[m_CurrentModelIndex]);
 }
 
 void Application::CreateTestLights() {
-    // Key light: Directional light (sun/moon)
+    // Key light: Front-top directional light (main illumination)
     auto keyLight = std::make_unique<DirectionalLight>(
-        glm::vec3(0.5f, -1.0f, 0.3f),     // Direction
-        glm::vec3(1.0f, 0.95f, 0.9f),     // Warm white color
-        1.5f                               // Intensity (increased from 0.8)
+        glm::vec3(0.2f, -0.5f, -1.0f),    // Direction: from front-top toward model
+        glm::vec3(1.0f, 1.0f, 1.0f),      // Pure white for neutral lighting
+        5.0f                               // High intensity for main light
     );
     m_Scene->AddLight(std::move(keyLight));
 
-    // Fill light: Directional from opposite side
+    // Fill light: Side-back light for fill
     auto fillLight = std::make_unique<DirectionalLight>(
-        glm::vec3(-0.3f, -0.5f, -0.8f),   // Direction
-        glm::vec3(0.4f, 0.5f, 0.7f),      // Cool blue color
-        0.6f                               // Intensity (increased from 0.3)
+        glm::vec3(-0.7f, 0.0f, 0.5f),     // Direction: from side-back
+        glm::vec3(0.8f, 0.9f, 1.0f),      // Slight cool tint
+        2.5f                               // Medium intensity for fill
     );
     m_Scene->AddLight(std::move(fillLight));
 
-    // Accent point light (rotating around model)
+    // Rim light: Back-top light for edge definition
+    auto rimLight = std::make_unique<DirectionalLight>(
+        glm::vec3(0.0f, -0.3f, 1.0f),     // Direction: from behind
+        glm::vec3(1.0f, 0.95f, 0.85f),    // Warm tint for rim
+        2.0f                               // Medium intensity
+    );
+    m_Scene->AddLight(std::move(rimLight));
+
+    // Point light: Close to model for local highlights
     auto pointLight = std::make_unique<PointLight>(
-        glm::vec3(2.0f, 1.0f, 0.0f),      // Position
-        5.0f,                              // Range
-        glm::vec3(1.0f, 0.3f, 0.1f),      // Orange/red color
-        3.0f                               // Intensity (increased from 2.0)
+        glm::vec3(1.0f, 0.5f, -1.5f),     // Position: front-right of model
+        10.0f,                             // Range
+        glm::vec3(1.0f, 1.0f, 1.0f),      // White color
+        8.0f                               // High intensity
     );
     m_Scene->AddLight(std::move(pointLight));
-
-    // Spot light (flashlight effect)
-    auto spotLight = std::make_unique<SpotLight>(
-        glm::vec3(0.0f, 3.0f, 2.0f),      // Position
-        glm::vec3(0.0f, -1.0f, -0.5f),    // Direction
-        12.5f,                             // Inner cone (degrees)
-        20.0f,                             // Outer cone (degrees)
-        8.0f,                              // Range
-        glm::vec3(1.0f, 1.0f, 1.0f),      // White color
-        5.0f                               // Intensity (increased from 3.0)
-    );
-    m_Scene->AddLight(std::move(spotLight));
 
     METAGFX_INFO << "Created " << m_Scene->GetLightCount() << " test lights";
 }
@@ -368,11 +447,11 @@ void Application::CreateModelPipeline() {
 
     pipelineDesc.topology = PrimitiveTopology::TriangleList;
     pipelineDesc.rasterization.cullMode = CullMode::Back;
-    pipelineDesc.rasterization.frontFace = FrontFace::Clockwise;  // Clockwise because projection Y-flip reverses winding
+    pipelineDesc.rasterization.frontFace = FrontFace::CounterClockwise;  // glTF uses CCW winding order
 
-    // Enable depth testing (will be added later, for now just set defaults)
-    pipelineDesc.depthStencil.depthTestEnable = false;
-    pipelineDesc.depthStencil.depthWriteEnable = false;
+    // Enable depth testing for proper 3D rendering
+    pipelineDesc.depthStencil.depthTestEnable = true;
+    pipelineDesc.depthStencil.depthWriteEnable = true;
 
     m_ModelPipeline = m_Device->CreateGraphicsPipeline(pipelineDesc);
 
@@ -412,36 +491,68 @@ void Application::ProcessEvents() {
                     METAGFX_INFO << "Escape key pressed";
                     m_Running = false;
                 }
-                // Toggle camera control with C key
-                if (event.key.key == SDLK_C) {
-                    m_CameraEnabled = !m_CameraEnabled;
-                    SDL_SetWindowRelativeMouseMode(m_Window, m_CameraEnabled);
-                    METAGFX_INFO << "Camera control " << (m_CameraEnabled ? "enabled" : "disabled");
-                    m_FirstMouse = true;  // Reset mouse position
+                // Model switching shortcuts
+                else if (event.key.key == SDLK_N) {
+                    METAGFX_INFO << "Loading next model...";
+                    LoadNextModel();
+                }
+                else if (event.key.key == SDLK_P) {
+                    METAGFX_INFO << "Loading previous model...";
+                    LoadPreviousModel();
+                }
+                // Direct model selection (1-4)
+                else if (event.key.key == SDLK_1 && m_AvailableModels.size() > 0) {
+                    m_CurrentModelIndex = 0;
+                    LoadModel(m_AvailableModels[m_CurrentModelIndex]);
+                }
+                else if (event.key.key == SDLK_2 && m_AvailableModels.size() > 1) {
+                    m_CurrentModelIndex = 1;
+                    LoadModel(m_AvailableModels[m_CurrentModelIndex]);
+                }
+                else if (event.key.key == SDLK_3 && m_AvailableModels.size() > 2) {
+                    m_CurrentModelIndex = 2;
+                    LoadModel(m_AvailableModels[m_CurrentModelIndex]);
+                }
+                else if (event.key.key == SDLK_4 && m_AvailableModels.size() > 3) {
+                    m_CurrentModelIndex = 3;
+                    LoadModel(m_AvailableModels[m_CurrentModelIndex]);
                 }
                 break;
-                
+
+            case SDL_EVENT_MOUSE_BUTTON_DOWN:
+                if (event.button.button == SDL_BUTTON_LEFT) {
+                    m_MouseButtonPressed = true;
+                    m_FirstMouse = true;  // Reset for new drag
+                    METAGFX_INFO << "Mouse button pressed - drag enabled";
+                }
+                break;
+
+            case SDL_EVENT_MOUSE_BUTTON_UP:
+                if (event.button.button == SDL_BUTTON_LEFT) {
+                    m_MouseButtonPressed = false;
+                    METAGFX_INFO << "Mouse button released";
+                }
+                break;
+
             case SDL_EVENT_MOUSE_MOTION:
-                if (m_CameraEnabled) {
+                if (m_MouseButtonPressed) {
                     if (m_FirstMouse) {
                         m_LastX = static_cast<float>(event.motion.x);
                         m_LastY = static_cast<float>(event.motion.y);
                         m_FirstMouse = false;
                     }
-                    
+
                     float xoffset = static_cast<float>(event.motion.x) - m_LastX;
                     float yoffset = m_LastY - static_cast<float>(event.motion.y);
                     m_LastX = static_cast<float>(event.motion.x);
                     m_LastY = static_cast<float>(event.motion.y);
-                    
+
                     m_Camera->ProcessMouseMovement(xoffset, yoffset);
                 }
                 break;
-                
+
             case SDL_EVENT_MOUSE_WHEEL:
-                if (m_CameraEnabled) {
-                    m_Camera->ProcessMouseScroll(static_cast<float>(event.wheel.y));
-                }
+                m_Camera->ProcessMouseScroll(static_cast<float>(event.wheel.y));
                 break;
                 
             case SDL_EVENT_WINDOW_RESIZED:
@@ -460,11 +571,9 @@ void Application::ProcessEvents() {
 
 // In Update():
 void Application::Update(float deltaTime) {
-    if (!m_CameraEnabled) return;
-    
-    // Process keyboard input for camera
+    // Process keyboard input for camera movement (WASD + QE)
     const bool* keyState = SDL_GetKeyboardState(nullptr);
-    
+
     if (keyState[SDL_SCANCODE_W])
         m_Camera->ProcessKeyboard(SDLK_W, deltaTime);
     if (keyState[SDL_SCANCODE_S])
@@ -490,9 +599,11 @@ void Application::Render() {
     
     // Update uniform buffer
     UniformBufferObject ubo{};
-    ubo.model = glm::rotate(glm::mat4(1.0f),
-                           static_cast<float>(SDL_GetTicks()) / 1000.0f * glm::radians(45.0f),
-                           glm::vec3(0.0f, 1.0f, 0.0f));
+    // Model matrix: flip upside down and no Y rotation to see default front
+    glm::mat4 modelMatrix = glm::mat4(1.0f);
+    modelMatrix = glm::rotate(modelMatrix, glm::radians(180.0f), glm::vec3(1.0f, 0.0f, 0.0f));  // Flip upside down
+    // No Y rotation - let's see what the default orientation shows
+    ubo.model = modelMatrix;
     ubo.view = m_Camera->GetViewMatrix();
     ubo.projection = m_Camera->GetProjectionMatrix();
 
@@ -556,26 +667,85 @@ void Application::Render() {
                 MaterialProperties matProps = material->GetProperties();
                 m_MaterialBuffers[0]->CopyData(&matProps, sizeof(matProps));
 
-                // Bind texture (albedo map if present, otherwise default checkerboard)
+                // Bind all PBR textures (or defaults)
+
+                // Binding 2: Albedo map
                 Ref<rhi::Texture> albedoMap = material->GetAlbedoMap();
-                uint32_t flags;
                 if (albedoMap) {
                     m_DescriptorSet->UpdateTexture(2, albedoMap, m_LinearRepeatSampler);
-                    flags = material->GetTextureFlags();
                 } else {
-                    // Use default checkerboard texture and force texture flag on
                     m_DescriptorSet->UpdateTexture(2, m_DefaultTexture, m_LinearRepeatSampler);
-                    flags = static_cast<uint32_t>(MaterialTextureFlags::HasAlbedoMap);
                 }
 
-                // Re-bind descriptor set after texture update
+                // Binding 4: Normal map
+                Ref<rhi::Texture> normalMap = material->GetNormalMap();
+                if (normalMap) {
+                    m_DescriptorSet->UpdateTexture(4, normalMap, m_LinearRepeatSampler);
+                } else {
+                    m_DescriptorSet->UpdateTexture(4, m_DefaultNormalMap, m_LinearRepeatSampler);
+                }
+
+                // Binding 5: Metallic map
+                Ref<rhi::Texture> metallicMap = material->GetMetallicMap();
+                Ref<rhi::Texture> metallicRoughnessMap = material->GetMetallicRoughnessMap();
+                if (metallicRoughnessMap) {
+                    // Use combined texture for both metallic (binding 5) and roughness (binding 6)
+                    m_DescriptorSet->UpdateTexture(5, metallicRoughnessMap, m_LinearRepeatSampler);
+                    m_DescriptorSet->UpdateTexture(6, metallicRoughnessMap, m_LinearRepeatSampler);
+                } else {
+                    if (metallicMap) {
+                        m_DescriptorSet->UpdateTexture(5, metallicMap, m_LinearRepeatSampler);
+                    } else {
+                        m_DescriptorSet->UpdateTexture(5, m_DefaultWhiteTexture, m_LinearRepeatSampler);
+                    }
+
+                    // Binding 6: Roughness map
+                    Ref<rhi::Texture> roughnessMap = material->GetRoughnessMap();
+                    if (roughnessMap) {
+                        m_DescriptorSet->UpdateTexture(6, roughnessMap, m_LinearRepeatSampler);
+                    } else {
+                        m_DescriptorSet->UpdateTexture(6, m_DefaultWhiteTexture, m_LinearRepeatSampler);
+                    }
+                }
+
+                // Binding 7: AO map
+                Ref<rhi::Texture> aoMap = material->GetAOMap();
+                if (aoMap) {
+                    m_DescriptorSet->UpdateTexture(7, aoMap, m_LinearRepeatSampler);
+                } else {
+                    m_DescriptorSet->UpdateTexture(7, m_DefaultWhiteTexture, m_LinearRepeatSampler);
+                }
+
+                // Re-bind descriptor set after texture updates
                 vkCmd->BindDescriptorSet(vkPipeline->GetLayout(),
                                         m_DescriptorSet->GetSet(0));
 
-                // Push material flags (offset 16 bytes after cameraPosition vec4)
+                // Push material flags and exposure (offset 16 bytes after cameraPosition vec4)
+                uint32_t flags = material->GetTextureFlags();
+                float exposure = 1.0f;  // Default exposure value
+
+                // Debug: Log flags on first frame
+                static bool loggedOnce = false;
+                if (!loggedOnce) {
+                    METAGFX_INFO << "Material texture flags: 0x" << std::hex << flags << std::dec
+                                 << " (HasAlbedo=" << ((flags & 0x1) != 0)
+                                 << ", HasNormal=" << ((flags & 0x2) != 0)
+                                 << ", HasMetallic=" << ((flags & 0x4) != 0)
+                                 << ", HasRoughness=" << ((flags & 0x8) != 0)
+                                 << ", HasMetallicRoughness=" << ((flags & 0x10) != 0)
+                                 << ", HasAO=" << ((flags & 0x20) != 0) << ")";
+                    loggedOnce = true;
+                }
+
+                // Push flags (offset 16, size 4)
                 vkCmd->PushConstants(vkPipeline->GetLayout(),
                                     VK_SHADER_STAGE_FRAGMENT_BIT,
                                     16, sizeof(uint32_t), &flags);
+
+                // Push exposure (offset 20, size 4)
+                vkCmd->PushConstants(vkPipeline->GetLayout(),
+                                    VK_SHADER_STAGE_FRAGMENT_BIT,
+                                    20, sizeof(float), &exposure);
 
                 // Bind and draw
                 cmd->BindVertexBuffer(mesh->GetVertexBuffer());
@@ -616,8 +786,10 @@ void Application::Shutdown() {
     m_MaterialBuffers[0].reset();
     m_MaterialBuffers[1].reset();
     m_DescriptorSet.reset();
-    m_DefaultTexture.reset();      // Clean up before device
-    m_LinearRepeatSampler.reset(); // Clean up before device
+    m_DefaultTexture.reset();         // Clean up before device
+    m_DefaultNormalMap.reset();       // Clean up before device
+    m_DefaultWhiteTexture.reset();    // Clean up before device
+    m_LinearRepeatSampler.reset();    // Clean up before device
     m_Device.reset();
     
     if (m_Window) {

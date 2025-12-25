@@ -30,6 +30,26 @@ ImageData LoadImage(const std::string& filepath, int desiredChannels) {
     return data;
 }
 
+ImageData LoadImageFromMemory(const uint8* buffer, uint32 bufferSize, int desiredChannels) {
+    ImageData data;
+
+    int width, height, channels;
+    data.pixels = stbi_load_from_memory(buffer, static_cast<int>(bufferSize), &width, &height, &channels, desiredChannels);
+
+    if (!data.pixels) {
+        METAGFX_ERROR << "Failed to load image from memory - " << stbi_failure_reason();
+        return data;
+    }
+
+    data.width = static_cast<uint32>(width);
+    data.height = static_cast<uint32>(height);
+    data.channels = desiredChannels > 0 ? static_cast<uint32>(desiredChannels) : static_cast<uint32>(channels);
+
+    METAGFX_INFO << "Loaded embedded image from memory (" << data.width << "x" << data.height << ", " << data.channels << " channels)";
+
+    return data;
+}
+
 void FreeImage(ImageData& data) {
     if (data.pixels) {
         stbi_image_free(data.pixels);

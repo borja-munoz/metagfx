@@ -13,6 +13,7 @@
 #include <SDL3/SDL.h>
 #include <glm/glm.hpp>
 #include <string>
+#include <vector>
 
 namespace metagfx {
 
@@ -46,6 +47,9 @@ private:
     void CreateTriangle();
     void CreateModelPipeline();
     void CreateTestLights();
+    void LoadModel(const std::string& path);
+    void LoadNextModel();
+    void LoadPreviousModel();
     void ProcessEvents();
     void Update(float deltaTime);
     void Render();
@@ -65,7 +69,8 @@ private:
     bool m_FirstMouse = true;
     float m_LastX = 640.0f;
     float m_LastY = 360.0f;
-    bool m_CameraEnabled = true;
+    bool m_CameraEnabled = false;  // Disabled by default
+    bool m_MouseButtonPressed = false;  // Track mouse button state for click-and-drag
     
     // Uniform buffers
     struct UniformBufferObject {
@@ -81,11 +86,17 @@ private:
 
     // Texture resources
     Ref<rhi::Sampler> m_LinearRepeatSampler;
-    Ref<rhi::Texture> m_DefaultTexture;  // White 1x1 fallback texture
+    Ref<rhi::Texture> m_DefaultTexture;  // Checker pattern for albedo
+    Ref<rhi::Texture> m_DefaultNormalMap;  // Flat normal map (128,128,255)
+    Ref<rhi::Texture> m_DefaultWhiteTexture;  // White 1x1 for metallic/roughness/AO
 
     // Scene and model
     std::unique_ptr<Scene> m_Scene;
     std::unique_ptr<Model> m_Model;
+
+    // Model management
+    std::vector<std::string> m_AvailableModels;
+    int m_CurrentModelIndex = 0;
 };
 
 } // namespace metagfx

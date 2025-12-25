@@ -85,7 +85,7 @@ private:
     
     // Camera options
     float m_MovementSpeed = 2.5f;
-    float m_MouseSensitivity = 0.1f;
+    float m_MouseSensitivity = 0.5f;  // Increased from 0.1 for better click-and-drag responsiveness
     float m_ZoomSensitivity = 1.0f;
     
     // Matrices
