@@ -161,16 +161,19 @@ void VulkanDevice::CreateLogicalDevice() {
     // Device features
     VkPhysicalDeviceFeatures deviceFeatures{};
     deviceFeatures.fillModeNonSolid = VK_TRUE; // For wireframe mode
-    
+
+    // NOTE: Dynamic rendering causes issues with MoltenVK on macOS
+    // We'll use traditional render passes for now
+
     // Device extensions
     std::vector<const char*> deviceExtensions = {
         VK_KHR_SWAPCHAIN_EXTENSION_NAME
     };
-    
+
     #ifdef __APPLE__
     deviceExtensions.push_back("VK_KHR_portability_subset");
     #endif
-    
+
     VkDeviceCreateInfo createInfo{};
     createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
     createInfo.queueCreateInfoCount = static_cast<uint32>(queueCreateInfos.size());
@@ -274,8 +277,12 @@ void VulkanDevice::SubmitCommandBuffer(Ref<CommandBuffer> commandBuffer) {
     submitInfo.pSignalSemaphores = signalSemaphores;
     
     VkFence fence = swapChain->GetInFlightFence();
-    vkResetFences(m_Context.device, 1, &fence);
-    VK_CHECK(vkQueueSubmit(m_Context.graphicsQueue, 1, &submitInfo, fence));
+
+    // NO fence wait/reset here - that will be done in Present before acquiring next image
+    VkResult result = vkQueueSubmit(m_Context.graphicsQueue, 1, &submitInfo, fence);
+    if (result != VK_SUCCESS) {
+        METAGFX_ERROR << "Failed to submit command buffer: " << result;
+    }
 }
 
 void VulkanDevice::WaitIdle() {

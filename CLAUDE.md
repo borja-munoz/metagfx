@@ -260,6 +260,37 @@ descriptorSet->Update();
 commandBuffer->BindDescriptorSets(pipelineLayout, descriptorSet);
 ```
 
+### Resource Management Pattern
+
+MetaGFX uses a **deferred deletion queue** to safely manage GPU resource lifetimes:
+
+```cpp
+// In Application.h
+struct PendingDeletion {
+    std::unique_ptr<Model> model;
+    uint32 frameCount;  // Frames to wait before deletion
+};
+std::vector<PendingDeletion> m_DeletionQueue;
+
+// When switching models
+if (m_Model) {
+    // Queue old model for deletion after MAX_FRAMES_IN_FLIGHT frames
+    m_DeletionQueue.push_back({std::move(m_Model), 2});
+}
+
+// Each frame, process the deletion queue
+for (auto it = m_DeletionQueue.begin(); it != m_DeletionQueue.end(); ) {
+    it->frameCount--;
+    if (it->frameCount == 0) {
+        it = m_DeletionQueue.erase(it);  // Safe to destroy now
+    } else {
+        ++it;
+    }
+}
+```
+
+This prevents crashes from destroying resources while they're still referenced by in-flight GPU command buffers. See `docs/resource_management.md` for detailed explanation.
+
 ## Common Issues
 
 ### Shader Compilation Errors
@@ -284,6 +315,10 @@ Key documentation files:
 - `docs/model_loading.md` - Model loading system design (Mesh, Model, Assimp integration)
 - `docs/material_system.md` - Material system and Blinn-Phong lighting
 - `docs/textures_and_samplers.md` - Texture loading, sampling, and material integration
+- `docs/light_system.md` - Light system design and implementation
+- `docs/pbr_rendering.md` - PBR rendering with Cook-Torrance BRDF
+- `docs/resource_management.md` - GPU resource lifetimes and deferred deletion
+- `docs/imgui_integration.md` - ImGui GUI system integration and usage
 - `claude/metagfx_roadmap.md` - Full implementation roadmap (10 phases, 30+ milestones)
 - `claude/milestone_x_y/` - Per-milestone implementation notes
 

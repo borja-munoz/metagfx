@@ -26,6 +26,7 @@ public:
     // Vulkan-specific
     VkSwapchainKHR GetHandle() const { return m_SwapChain; }
     uint32 GetCurrentImageIndex() const { return m_CurrentImageIndex; }
+    uint32 GetCurrentFrame() const { return m_CurrentFrame; }
     VkSemaphore GetImageAvailableSemaphore() const { return m_ImageAvailableSemaphores[m_CurrentFrame]; }
     VkSemaphore GetRenderFinishedSemaphore() const { return m_RenderFinishedSemaphores[m_CurrentFrame]; }
     VkFence GetInFlightFence() const { return m_InFlightFences[m_CurrentFrame]; }
@@ -38,12 +39,13 @@ private:
 
     VulkanContext& m_Context;
     SDL_Window* m_Window;
-    
+
     VkSwapchainKHR m_SwapChain = VK_NULL_HANDLE;
+    VkSwapchainKHR m_OldSwapChain = VK_NULL_HANDLE;  // For swap chain recreation
     std::vector<VkImage> m_Images;
     std::vector<VkImageView> m_ImageViews;
     std::vector<Ref<Texture>> m_Textures;
-    
+
     uint32 m_Width = 0;
     uint32 m_Height = 0;
     Format m_Format = Format::Undefined;

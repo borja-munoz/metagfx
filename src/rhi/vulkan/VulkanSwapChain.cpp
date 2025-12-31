@@ -20,6 +20,13 @@ VulkanSwapChain::VulkanSwapChain(VulkanContext& context, SDL_Window* window)
     CreateImageViews();
     CreateSyncObjects();
 
+    // Acquire the first image
+    VkResult result = vkAcquireNextImageKHR(m_Context.device, m_SwapChain, UINT64_MAX,
+                                            m_ImageAvailableSemaphores[m_CurrentFrame], VK_NULL_HANDLE, &m_CurrentImageIndex);
+    if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) {
+        METAGFX_ERROR << "Failed to acquire initial swap chain image";
+    }
+
     METAGFX_INFO << "Vulkan swap chain created: " << m_Width << "x" << m_Height;
 }
 
@@ -104,7 +111,7 @@ void VulkanSwapChain::CreateSwapChain() {
     createInfo.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
     createInfo.presentMode = presentMode;
     createInfo.clipped = VK_TRUE;
-    createInfo.oldSwapchain = VK_NULL_HANDLE;
+    createInfo.oldSwapchain = m_OldSwapChain;
     
     VK_CHECK(vkCreateSwapchainKHR(m_Context.device, &createInfo, nullptr, &m_SwapChain));
     
@@ -186,45 +193,108 @@ void VulkanSwapChain::Cleanup() {
 }
 
 void VulkanSwapChain::Present() {
-    vkWaitForFences(m_Context.device, 1, &m_InFlightFences[m_CurrentFrame], VK_TRUE, UINT64_MAX);
-    
     VkPresentInfoKHR presentInfo{};
     presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
-    
+
     VkSemaphore signalSemaphores[] = { m_RenderFinishedSemaphores[m_CurrentFrame] };
     presentInfo.waitSemaphoreCount = 1;
     presentInfo.pWaitSemaphores = signalSemaphores;
-    
+
     VkSwapchainKHR swapChains[] = { m_SwapChain };
     presentInfo.swapchainCount = 1;
     presentInfo.pSwapchains = swapChains;
     presentInfo.pImageIndices = &m_CurrentImageIndex;
-    
-    vkQueuePresentKHR(m_Context.presentQueue, &presentInfo);
-    
+
+    VkResult result = vkQueuePresentKHR(m_Context.presentQueue, &presentInfo);
+
+    // Check if swap chain is out of date or suboptimal
+    bool swapChainNeedsRecreation = (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR);
+
     // Advance to next frame
     m_CurrentFrame = (m_CurrentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
-    
+
+    // Wait for the NEXT frame's fence and reset it before acquiring
+    // This ensures we can safely reuse resources from MAX_FRAMES_IN_FLIGHT frames ago
+    vkWaitForFences(m_Context.device, 1, &m_InFlightFences[m_CurrentFrame], VK_TRUE, UINT64_MAX);
+    vkResetFences(m_Context.device, 1, &m_InFlightFences[m_CurrentFrame]);
+
     // Acquire next image
-    vkAcquireNextImageKHR(m_Context.device, m_SwapChain, UINT64_MAX,
-                         m_ImageAvailableSemaphores[m_CurrentFrame], VK_NULL_HANDLE, &m_CurrentImageIndex);
+    result = vkAcquireNextImageKHR(m_Context.device, m_SwapChain, UINT64_MAX,
+                                   m_ImageAvailableSemaphores[m_CurrentFrame], VK_NULL_HANDLE, &m_CurrentImageIndex);
+
+    // Check if swap chain needs recreation
+    if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) {
+        swapChainNeedsRecreation = true;
+    } else if (result != VK_SUCCESS) {
+        METAGFX_ERROR << "Failed to acquire swap chain image";
+    }
+
+    // Note: Swap chain recreation should be handled by the application layer
+    // by calling Resize() when it detects the window has been resized
 }
 
 void VulkanSwapChain::Resize(uint32 width, uint32 height) {
+    // Skip resize if dimensions haven't changed
+    if (m_Width == width && m_Height == height) {
+        return;
+    }
+
     m_Width = width;
     m_Height = height;
-    
-    vkDeviceWaitIdle(m_Context.device);
-    
-    Cleanup();
+
+    // Wait for in-flight frames to complete (don't use vkDeviceWaitIdle as it can timeout on MoltenVK)
+    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+        if (m_InFlightFences[i] != VK_NULL_HANDLE) {
+            vkWaitForFences(m_Context.device, 1, &m_InFlightFences[i], VK_TRUE, UINT64_MAX);
+        }
+    }
+
+    // Save old swap chain for proper recreation
+    VkSwapchainKHR oldSwapChain = m_SwapChain;
+
+    // Clean up old resources (except swap chain itself, we'll pass it to creation)
+    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+        if (m_ImageAvailableSemaphores[i] != VK_NULL_HANDLE) {
+            vkDestroySemaphore(m_Context.device, m_ImageAvailableSemaphores[i], nullptr);
+            m_ImageAvailableSemaphores[i] = VK_NULL_HANDLE;
+        }
+        if (m_RenderFinishedSemaphores[i] != VK_NULL_HANDLE) {
+            vkDestroySemaphore(m_Context.device, m_RenderFinishedSemaphores[i], nullptr);
+            m_RenderFinishedSemaphores[i] = VK_NULL_HANDLE;
+        }
+        if (m_InFlightFences[i] != VK_NULL_HANDLE) {
+            vkDestroyFence(m_Context.device, m_InFlightFences[i], nullptr);
+            m_InFlightFences[i] = VK_NULL_HANDLE;
+        }
+    }
+
+    m_Textures.clear();
+
+    for (auto imageView : m_ImageViews) {
+        vkDestroyImageView(m_Context.device, imageView, nullptr);
+    }
+    m_ImageViews.clear();
+
+    // Recreate swap chain (passing old one for efficient recreation)
+    m_OldSwapChain = oldSwapChain;
     CreateSwapChain();
+    m_OldSwapChain = VK_NULL_HANDLE;
+
+    // Destroy old swap chain after new one is created
+    if (oldSwapChain != VK_NULL_HANDLE) {
+        vkDestroySwapchainKHR(m_Context.device, oldSwapChain, nullptr);
+    }
+
     CreateImageViews();
     CreateSyncObjects();
-    
-    // Acquire first image
-    vkAcquireNextImageKHR(m_Context.device, m_SwapChain, UINT64_MAX,
-                         m_ImageAvailableSemaphores[m_CurrentFrame], VK_NULL_HANDLE, &m_CurrentImageIndex);
-    
+
+    // Acquire the first image after resize
+    VkResult result = vkAcquireNextImageKHR(m_Context.device, m_SwapChain, UINT64_MAX,
+                                            m_ImageAvailableSemaphores[m_CurrentFrame], VK_NULL_HANDLE, &m_CurrentImageIndex);
+    if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) {
+        METAGFX_ERROR << "Failed to acquire swap chain image after resize";
+    }
+
     METAGFX_INFO << "Swap chain resized: " << m_Width << "x" << m_Height;
 }
 

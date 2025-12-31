@@ -36,3 +36,6 @@ set_target_properties(assimp PROPERTIES FOLDER "External")
 if(TARGET zlibstatic)
     set_target_properties(zlibstatic PROPERTIES FOLDER "External")
 endif()
+
+# Dear ImGui - immediate-mode GUI library
+add_subdirectory(imgui)

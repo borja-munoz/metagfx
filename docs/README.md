@@ -123,6 +123,36 @@ Complete light system design and implementation (Milestone 3.1):
 
 ---
 
+#### [Resource Management](resource_management.md)
+**Topics**: GPU resource lifetimes and deferred deletion
+
+Comprehensive guide to safe resource management:
+- The problem: in-flight frames and resource destruction
+- Deferred deletion queue implementation
+- Double-buffering and `MAX_FRAMES_IN_FLIGHT`
+- Vulkan synchronization model (fences, semaphores)
+- Alternative approaches and why they fail
+- Best practices for resource lifetime management
+- Future enhancements (generalized deletion, ring buffers)
+
+---
+
+#### [ImGui Integration](imgui_integration.md)
+**Topics**: Immediate-mode GUI with Dear ImGui
+
+Complete ImGui integration guide:
+- Architecture and build integration
+- Initialization (descriptor pool, render pass, backends)
+- Framebuffer management (lazy creation, resize handling)
+- Per-frame rendering pipeline
+- Event handling and input capture
+- Common UI patterns and widget usage
+- Integration with shader parameters (push constants)
+- Performance considerations and troubleshooting
+- Future enhancements (docking, custom themes, profiler)
+
+---
+
 ## Project Documentation
 
 ### Root Level Documents
@@ -197,7 +227,9 @@ Per-milestone implementation notes and artifacts:
 3. [Material System](material_system.md) - Materials and lighting
 4. [Textures and Samplers](textures_and_samplers.md) - Texture system
 5. [Light System](light_system.md) - Dynamic lighting
-6. [Roadmap](../claude/metagfx_roadmap.md) - Future features
+6. [Resource Management](resource_management.md) - GPU resource lifetimes
+7. [ImGui Integration](imgui_integration.md) - GUI system
+8. [Roadmap](../claude/metagfx_roadmap.md) - Future features
 
 **Development**:
 1. [CLAUDE.md](../CLAUDE.md) - Development guide
@@ -246,19 +278,22 @@ cd bin
 ```
 
 ### Project Status
-**Current Milestone**: 3.1 (Light System) ✅ Complete
+**Current Milestone**: 3.2 (PBR - Physically Based Rendering) ✅ Phases 1, 2, 4 Complete
 **Implemented Features**:
 - ✅ Vulkan backend
 - ✅ Camera system with FPS controls
 - ✅ Model loading (OBJ, FBX, glTF, COLLADA)
+- ✅ Runtime model switching with deferred deletion
 - ✅ Procedural geometry (cube, sphere)
-- ✅ Material system (albedo, roughness, metallic)
-- ✅ Blinn-Phong lighting (ambient, diffuse, specular)
-- ✅ Texture system (albedo maps, samplers, stb_image)
+- ✅ Material system (albedo, roughness, metallic, AO)
+- ✅ PBR rendering with Cook-Torrance BRDF
+- ✅ Normal mapping with derivative-based TBN
+- ✅ ACES filmic tone mapping and exposure control
+- ✅ Texture system (albedo, normal, metallic-roughness, AO)
 - ✅ Light system (directional, point, spot lights - up to 16 lights)
 
 **Next Milestones**:
-- 3.2: PBR (Physically Based Rendering)
+- 3.2 Phase 3: IBL (Image-Based Lighting)
 - 3.3: Shadow Mapping
 - 4.1: Direct3D 12 Implementation
 

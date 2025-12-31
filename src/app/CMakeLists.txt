@@ -21,6 +21,7 @@ target_link_libraries(metagfx
     PRIVATE
         metagfx_renderer
         SDL3::SDL3
+        imgui_backends  # ImGui with SDL3 and Vulkan backends
 )
 
 # Copy SDL3 DLL on Windows

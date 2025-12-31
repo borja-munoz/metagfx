@@ -12,6 +12,7 @@
 #include "metagfx/scene/Scene.h"
 #include <SDL3/SDL.h>
 #include <glm/glm.hpp>
+#include <vulkan/vulkan.h>
 #include <string>
 #include <vector>
 
@@ -53,6 +54,11 @@ private:
     void ProcessEvents();
     void Update(float deltaTime);
     void Render();
+
+    // ImGui
+    void InitImGui();
+    void ShutdownImGui();
+    void RenderImGui();
 
     ApplicationConfig m_Config;
     SDL_Window* m_Window = nullptr;
@@ -97,6 +103,24 @@ private:
     // Model management
     std::vector<std::string> m_AvailableModels;
     int m_CurrentModelIndex = 0;
+    std::string m_PendingModelPath;  // Model to load at start of next frame
+    bool m_HasPendingModel = false;
+
+    // Deferred deletion queue for old models
+    struct PendingDeletion {
+        std::unique_ptr<Model> model;
+        uint32 frameCount;  // Frames to wait before deletion
+    };
+    std::vector<PendingDeletion> m_DeletionQueue;
+
+    // ImGui state
+    VkDescriptorPool m_ImGuiDescriptorPool = VK_NULL_HANDLE;
+    VkRenderPass m_ImGuiRenderPass = VK_NULL_HANDLE;
+    std::vector<VkFramebuffer> m_ImGuiFramebuffers;  // One per swap chain image
+
+    // GUI parameters
+    float m_Exposure = 1.0f;
+    bool m_ShowDemoWindow = false;
 };
 
 } // namespace metagfx

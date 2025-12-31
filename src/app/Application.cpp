@@ -15,12 +15,17 @@
 #include "metagfx/rhi/vulkan/VulkanDevice.h"
 #include "metagfx/rhi/vulkan/VulkanDescriptorSet.h"
 #include "metagfx/rhi/vulkan/VulkanPipeline.h"
+#include "metagfx/rhi/vulkan/VulkanSwapChain.h"
+#include "metagfx/rhi/vulkan/VulkanTexture.h"
 #include "metagfx/scene/Camera.h"
 #include "metagfx/scene/Material.h"
 #include "metagfx/scene/Mesh.h"
 #include "metagfx/utils/TextureUtils.h"
 #include <SDL3/SDL.h>
 #include <glm/glm.hpp>
+#include <imgui.h>
+#include <imgui_impl_sdl3.h>
+#include <imgui_impl_vulkan.h>
 
 namespace metagfx {
 
@@ -272,6 +277,10 @@ void Application::Init() {
     METAGFX_INFO << "  N - Next model";
     METAGFX_INFO << "  P - Previous model";
     METAGFX_INFO << "  ESC - Exit";
+
+    // Initialize ImGui
+    InitImGui();
+
     m_Running = true;
 }
 
@@ -481,6 +490,9 @@ void Application::Run() {
 void Application::ProcessEvents() {
     SDL_Event event;
     while (SDL_PollEvent(&event)) {
+        // Let ImGui handle events first
+        ImGui_ImplSDL3_ProcessEvent(&event);
+
         switch (event.type) {
             case SDL_EVENT_QUIT:
                 METAGFX_INFO << "Quit event received";
@@ -561,9 +573,19 @@ void Application::ProcessEvents() {
             case SDL_EVENT_WINDOW_RESIZED:
                 METAGFX_INFO << "Window resized: " << event.window.data1 << "x" << event.window.data2;
                 if (m_Device) {
+                    // Destroy old ImGui framebuffers before resizing swap chain
+                    auto vkDevice = std::static_pointer_cast<rhi::VulkanDevice>(m_Device);
+                    auto& context = vkDevice->GetContext();
+                    for (auto framebuffer : m_ImGuiFramebuffers) {
+                        if (framebuffer != VK_NULL_HANDLE) {
+                            vkDestroyFramebuffer(context.device, framebuffer, nullptr);
+                        }
+                    }
+                    m_ImGuiFramebuffers.clear();
+
                     m_Device->GetSwapChain()->Resize(event.window.data1, event.window.data2);
                     m_Camera->SetAspectRatio(
-                        static_cast<float>(event.window.data1) / 
+                        static_cast<float>(event.window.data1) /
                         static_cast<float>(event.window.data2)
                     );
                 }
@@ -594,12 +616,35 @@ void Application::Update(float deltaTime) {
 // In Render():
 void Application::Render() {
     using namespace rhi;
-    
+
     if (!m_Device) return;
-    
+
+    // Process pending model load (deferred from ImGui UI)
+    if (m_HasPendingModel) {
+        m_HasPendingModel = false;
+
+        // Queue old model for deletion after 2 frames
+        if (m_Model) {
+            m_DeletionQueue.push_back({std::move(m_Model), 2});
+        }
+
+        // Load new model
+        LoadModel(m_PendingModelPath);
+    }
+
+    // Process deletion queue
+    for (auto it = m_DeletionQueue.begin(); it != m_DeletionQueue.end(); ) {
+        it->frameCount--;
+        if (it->frameCount == 0) {
+            it = m_DeletionQueue.erase(it);
+        } else {
+            ++it;
+        }
+    }
+
     auto swapChain = m_Device->GetSwapChain();
     auto backBuffer = swapChain->GetCurrentBackBuffer();
-    
+
     // Update uniform buffer
     UniformBufferObject ubo{};
     // Model matrix: flip upside down and no Y rotation to see default front
@@ -725,7 +770,6 @@ void Application::Render() {
 
                 // Push material flags and exposure (offset 16 bytes after cameraPosition vec4)
                 uint32_t flags = material->GetTextureFlags();
-                float exposure = 1.0f;  // Default exposure value
 
                 // Debug: Log flags on first frame
                 static bool loggedOnce = false;
@@ -748,7 +792,7 @@ void Application::Render() {
                 // Push exposure (offset 20, size 4)
                 vkCmd->PushConstants(vkPipeline->GetLayout(),
                                     VK_SHADER_STAGE_FRAGMENT_BIT,
-                                    20, sizeof(float), &exposure);
+                                    20, sizeof(float), &m_Exposure);
 
                 // Bind and draw
                 cmd->BindVertexBuffer(mesh->GetVertexBuffer());
@@ -760,9 +804,14 @@ void Application::Render() {
 
     cmd->EndRendering();
     cmd->End();
-    
-    // Submit and present
+
+    // Submit command buffer for main rendering
     m_Device->SubmitCommandBuffer(cmd);
+
+    // Render ImGui overlay
+    RenderImGui();
+
+    // Present
     swapChain->Present();
     
     // Advance frame
@@ -773,6 +822,9 @@ void Application::Shutdown() {
     if (m_Device) {
         m_Device->WaitIdle();
     }
+
+    // Shutdown ImGui
+    ShutdownImGui();
 
     // Clean up scene and model
     m_Scene.reset();
@@ -803,6 +855,287 @@ void Application::Shutdown() {
 
     METAGFX_INFO << "Shutting down SDL...";
     SDL_Quit();
+}
+
+void Application::InitImGui() {
+    auto vkDevice = std::static_pointer_cast<rhi::VulkanDevice>(m_Device);
+    auto& context = vkDevice->GetContext();
+    auto swapChain = m_Device->GetSwapChain();
+
+    // Create descriptor pool for ImGui
+    VkDescriptorPoolSize poolSizes[] = {
+        { VK_DESCRIPTOR_TYPE_SAMPLER, 1000 },
+        { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1000 },
+        { VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1000 },
+        { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1000 },
+        { VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER, 1000 },
+        { VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER, 1000 },
+        { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1000 },
+        { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1000 },
+        { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 1000 },
+        { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC, 1000 },
+        { VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT, 1000 }
+    };
+
+    VkDescriptorPoolCreateInfo poolInfo{};
+    poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
+    poolInfo.maxSets = 1000;
+    poolInfo.poolSizeCount = 11;
+    poolInfo.pPoolSizes = poolSizes;
+
+    vkCreateDescriptorPool(context.device, &poolInfo, nullptr, &m_ImGuiDescriptorPool);
+
+    // Setup ImGui context
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImGuiIO& io = ImGui::GetIO();
+    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+
+    // Setup style
+    ImGui::StyleColorsDark();
+
+    // Create ImGui render pass
+    VkAttachmentDescription attachment{};
+    attachment.format = VK_FORMAT_B8G8R8A8_SRGB;
+    attachment.samples = VK_SAMPLE_COUNT_1_BIT;
+    attachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;  // Load existing content
+    attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    attachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    attachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    attachment.initialLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+    attachment.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+
+    VkAttachmentReference colorAttachmentRef{};
+    colorAttachmentRef.attachment = 0;
+    colorAttachmentRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+    VkSubpassDescription subpass{};
+    subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    subpass.colorAttachmentCount = 1;
+    subpass.pColorAttachments = &colorAttachmentRef;
+
+    VkSubpassDependency dependency{};
+    dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
+    dependency.dstSubpass = 0;
+    dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    dependency.srcAccessMask = 0;
+    dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+
+    VkRenderPassCreateInfo renderPassInfo{};
+    renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+    renderPassInfo.attachmentCount = 1;
+    renderPassInfo.pAttachments = &attachment;
+    renderPassInfo.subpassCount = 1;
+    renderPassInfo.pSubpasses = &subpass;
+    renderPassInfo.dependencyCount = 1;
+    renderPassInfo.pDependencies = &dependency;
+
+    vkCreateRenderPass(context.device, &renderPassInfo, nullptr, &m_ImGuiRenderPass);
+
+    // Initialize ImGui backends
+    ImGui_ImplSDL3_InitForVulkan(m_Window);
+
+    ImGui_ImplVulkan_InitInfo initInfo{};
+    initInfo.Instance = context.instance;
+    initInfo.PhysicalDevice = context.physicalDevice;
+    initInfo.Device = context.device;
+    initInfo.QueueFamily = context.graphicsQueueFamily;
+    initInfo.Queue = context.graphicsQueue;
+    initInfo.DescriptorPool = m_ImGuiDescriptorPool;
+    initInfo.RenderPass = m_ImGuiRenderPass;
+    initInfo.MinImageCount = 2;
+    initInfo.ImageCount = 2;
+    initInfo.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
+
+    ImGui_ImplVulkan_Init(&initInfo);
+
+    // Upload fonts
+    ImGui_ImplVulkan_CreateFontsTexture();
+
+    // Wait for font upload to complete
+    vkDeviceWaitIdle(context.device);
+
+    // Initialize framebuffers vector (created lazily during rendering)
+    auto vkSwapChain = std::static_pointer_cast<rhi::VulkanSwapChain>(swapChain);
+    m_ImGuiFramebuffers.resize(2, VK_NULL_HANDLE);  // Double-buffered
+}
+
+void Application::ShutdownImGui() {
+    if (!m_Device) return;
+
+    auto vkDevice = std::static_pointer_cast<rhi::VulkanDevice>(m_Device);
+    auto& context = vkDevice->GetContext();
+
+    // Destroy ImGui framebuffers
+    for (auto framebuffer : m_ImGuiFramebuffers) {
+        if (framebuffer != VK_NULL_HANDLE) {
+            vkDestroyFramebuffer(context.device, framebuffer, nullptr);
+        }
+    }
+    m_ImGuiFramebuffers.clear();
+
+    // Shutdown ImGui backends
+    ImGui_ImplVulkan_Shutdown();
+    ImGui_ImplSDL3_Shutdown();
+    ImGui::DestroyContext();
+
+    // Destroy ImGui resources
+    if (m_ImGuiRenderPass != VK_NULL_HANDLE) {
+        vkDestroyRenderPass(context.device, m_ImGuiRenderPass, nullptr);
+        m_ImGuiRenderPass = VK_NULL_HANDLE;
+    }
+
+    if (m_ImGuiDescriptorPool != VK_NULL_HANDLE) {
+        vkDestroyDescriptorPool(context.device, m_ImGuiDescriptorPool, nullptr);
+        m_ImGuiDescriptorPool = VK_NULL_HANDLE;
+    }
+}
+
+void Application::RenderImGui() {
+    if (!m_Device) return;
+
+    auto vkDevice = std::static_pointer_cast<rhi::VulkanDevice>(m_Device);
+    if (!vkDevice) return;
+
+    auto& context = vkDevice->GetContext();
+    auto swapChain = m_Device->GetSwapChain();
+    if (!swapChain) return;
+
+    // Start ImGui frame
+    ImGui_ImplVulkan_NewFrame();
+    ImGui_ImplSDL3_NewFrame();
+    ImGui::NewFrame();
+
+    // Define UI
+    ImGui::Begin("MetaGFX Controls");
+
+    // Model selection
+    const char* modelNames[] = {
+        "Damaged Helmet",
+        "Metal Rough Spheres",
+        "Bunny (Textured)",
+        "Bunny"
+    };
+    int currentModel = m_CurrentModelIndex;
+    if (ImGui::Combo("Model", &currentModel, modelNames, IM_ARRAYSIZE(modelNames))) {
+        if (currentModel != m_CurrentModelIndex) {
+            m_CurrentModelIndex = currentModel;
+            m_PendingModelPath = m_AvailableModels[m_CurrentModelIndex];
+            m_HasPendingModel = true;
+        }
+    }
+
+    // Exposure slider
+    ImGui::SliderFloat("Exposure", &m_Exposure, 0.1f, 5.0f);
+
+    // Demo window toggle
+    ImGui::Checkbox("Show Demo Window", &m_ShowDemoWindow);
+
+    ImGui::End();
+
+    // Show demo window if enabled
+    if (m_ShowDemoWindow) {
+        ImGui::ShowDemoWindow(&m_ShowDemoWindow);
+    }
+
+    // Render ImGui
+    ImGui::Render();
+
+    // Check if there's anything to draw
+    ImDrawData* drawData = ImGui::GetDrawData();
+    if (!drawData || drawData->TotalVtxCount == 0) {
+        return;  // Nothing to draw
+    }
+
+    // Get current swap chain image
+    auto vkSwapChain = std::static_pointer_cast<rhi::VulkanSwapChain>(swapChain);
+    if (!vkSwapChain) return;
+
+    uint32_t imageIndex = vkSwapChain->GetCurrentImageIndex();
+    auto backBuffer = swapChain->GetCurrentBackBuffer();
+    if (!backBuffer) return;
+
+    auto vkTexture = std::static_pointer_cast<rhi::VulkanTexture>(backBuffer);
+    if (!vkTexture) return;
+
+    // Create framebuffer if needed (lazy creation)
+    if (m_ImGuiFramebuffers[imageIndex] == VK_NULL_HANDLE) {
+        VkImageView attachments[] = { vkTexture->GetImageView() };
+
+        VkFramebufferCreateInfo framebufferInfo{};
+        framebufferInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+        framebufferInfo.renderPass = m_ImGuiRenderPass;
+        framebufferInfo.attachmentCount = 1;
+        framebufferInfo.pAttachments = attachments;
+        framebufferInfo.width = swapChain->GetWidth();
+        framebufferInfo.height = swapChain->GetHeight();
+        framebufferInfo.layers = 1;
+
+        vkCreateFramebuffer(context.device, &framebufferInfo, nullptr, &m_ImGuiFramebuffers[imageIndex]);
+    }
+
+    // Create a command buffer for ImGui rendering
+    auto imguiCmd = m_Device->CreateCommandBuffer();
+    auto vkImguiCmd = std::static_pointer_cast<rhi::VulkanCommandBuffer>(imguiCmd);
+    VkCommandBuffer commandBuffer = vkImguiCmd->GetHandle();
+
+    VkCommandBufferBeginInfo beginInfo{};
+    beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+
+    vkBeginCommandBuffer(commandBuffer, &beginInfo);
+
+    // Transition image layout from COLOR_ATTACHMENT_OPTIMAL to PRESENT_SRC_KHR
+    VkImageMemoryBarrier barrier{};
+    barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    barrier.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    barrier.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    barrier.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    barrier.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.image = vkTexture->GetImage();
+    barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    barrier.subresourceRange.baseMipLevel = 0;
+    barrier.subresourceRange.levelCount = 1;
+    barrier.subresourceRange.baseArrayLayer = 0;
+    barrier.subresourceRange.layerCount = 1;
+
+    vkCmdPipelineBarrier(
+        commandBuffer,
+        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+        0,
+        0, nullptr,
+        0, nullptr,
+        1, &barrier
+    );
+
+    VkRenderPassBeginInfo renderPassInfo{};
+    renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+    renderPassInfo.renderPass = m_ImGuiRenderPass;
+    renderPassInfo.framebuffer = m_ImGuiFramebuffers[imageIndex];
+    renderPassInfo.renderArea.offset = {0, 0};
+    renderPassInfo.renderArea.extent = {swapChain->GetWidth(), swapChain->GetHeight()};
+
+    vkCmdBeginRenderPass(commandBuffer, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+
+    // Record ImGui draw data
+    ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), commandBuffer);
+
+    vkCmdEndRenderPass(commandBuffer);
+    vkEndCommandBuffer(commandBuffer);
+
+    // Submit ImGui command buffer
+    VkSubmitInfo submitInfo{};
+    submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submitInfo.commandBufferCount = 1;
+    submitInfo.pCommandBuffers = &commandBuffer;
+
+    vkQueueSubmit(context.graphicsQueue, 1, &submitInfo, VK_NULL_HANDLE);
+    vkQueueWaitIdle(context.graphicsQueue);
 }
 
 } // namespace metagfx
