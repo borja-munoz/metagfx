@@ -37,6 +37,11 @@ else()
     add_compile_options(-Wall -Wextra -pedantic)
 endif()
 
+# Find Vulkan (needed for ImGui backends)
+if(METAGFX_USE_VULKAN)
+    find_package(Vulkan REQUIRED)
+endif()
+
 # External dependencies
 add_subdirectory(external)
 

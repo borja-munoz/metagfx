@@ -38,4 +38,38 @@ if(TARGET zlibstatic)
 endif()
 
 # Dear ImGui - immediate-mode GUI library
-add_subdirectory(imgui)
+# Build ImGui as static libraries (core + backends)
+set(IMGUI_DIR ${CMAKE_CURRENT_SOURCE_DIR}/imgui)
+
+# ImGui core library
+set(IMGUI_SOURCES
+    ${IMGUI_DIR}/imgui.cpp
+    ${IMGUI_DIR}/imgui_demo.cpp
+    ${IMGUI_DIR}/imgui_draw.cpp
+    ${IMGUI_DIR}/imgui_tables.cpp
+    ${IMGUI_DIR}/imgui_widgets.cpp
+)
+
+add_library(imgui STATIC ${IMGUI_SOURCES})
+target_include_directories(imgui PUBLIC ${IMGUI_DIR})
+set_target_properties(imgui PROPERTIES FOLDER "External")
+
+# ImGui backends library (SDL3 + Vulkan)
+set(IMGUI_BACKEND_SOURCES
+    ${IMGUI_DIR}/backends/imgui_impl_sdl3.cpp
+    ${IMGUI_DIR}/backends/imgui_impl_vulkan.cpp
+)
+
+add_library(imgui_backends STATIC ${IMGUI_BACKEND_SOURCES})
+target_include_directories(imgui_backends
+    PUBLIC
+        ${IMGUI_DIR}
+        ${IMGUI_DIR}/backends
+)
+target_link_libraries(imgui_backends
+    PUBLIC
+        imgui
+        Vulkan::Vulkan
+        SDL3::SDL3
+)
+set_target_properties(imgui_backends PROPERTIES FOLDER "External")
