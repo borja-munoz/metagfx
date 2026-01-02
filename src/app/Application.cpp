@@ -803,13 +803,14 @@ void Application::Render() {
     }
 
     cmd->EndRendering();
+
+    // Render ImGui overlay into the same command buffer
+    RenderImGui(cmd, backBuffer);
+
     cmd->End();
 
-    // Submit command buffer for main rendering
+    // Submit command buffer (contains both main rendering and ImGui)
     m_Device->SubmitCommandBuffer(cmd);
-
-    // Render ImGui overlay
-    RenderImGui();
 
     // Present
     swapChain->Present();
@@ -937,6 +938,12 @@ void Application::InitImGui() {
     // Initialize ImGui backends
     ImGui_ImplSDL3_InitForVulkan(m_Window);
 
+    // Get the actual swap chain image count by querying Vulkan
+    auto vkSwapChain = std::static_pointer_cast<rhi::VulkanSwapChain>(swapChain);
+    uint32_t imageCount = 0;
+    vkGetSwapchainImagesKHR(context.device, vkSwapChain->GetHandle(), &imageCount, nullptr);
+    METAGFX_INFO << "InitImGui: Swap chain has " << imageCount << " images";
+
     ImGui_ImplVulkan_InitInfo initInfo{};
     initInfo.Instance = context.instance;
     initInfo.PhysicalDevice = context.physicalDevice;
@@ -945,8 +952,8 @@ void Application::InitImGui() {
     initInfo.Queue = context.graphicsQueue;
     initInfo.DescriptorPool = m_ImGuiDescriptorPool;
     initInfo.RenderPass = m_ImGuiRenderPass;
-    initInfo.MinImageCount = 2;
-    initInfo.ImageCount = 2;
+    initInfo.MinImageCount = imageCount;
+    initInfo.ImageCount = imageCount;
     initInfo.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
 
     ImGui_ImplVulkan_Init(&initInfo);
@@ -958,8 +965,8 @@ void Application::InitImGui() {
     vkDeviceWaitIdle(context.device);
 
     // Initialize framebuffers vector (created lazily during rendering)
-    auto vkSwapChain = std::static_pointer_cast<rhi::VulkanSwapChain>(swapChain);
-    m_ImGuiFramebuffers.resize(2, VK_NULL_HANDLE);  // Double-buffered
+    // Need to match the swap chain image count (typically 2 or 3)
+    m_ImGuiFramebuffers.resize(imageCount, VK_NULL_HANDLE);
 }
 
 void Application::ShutdownImGui() {
@@ -993,22 +1000,37 @@ void Application::ShutdownImGui() {
     }
 }
 
-void Application::RenderImGui() {
-    if (!m_Device) return;
+void Application::RenderImGui(Ref<rhi::CommandBuffer> cmd, Ref<rhi::Texture> backBuffer) {
+    METAGFX_INFO << "RenderImGui: ENTRY";
+    if (!m_Device || !cmd || !backBuffer) {
+        METAGFX_INFO << "RenderImGui: Early exit - null pointer";
+        return;
+    }
 
     auto vkDevice = std::static_pointer_cast<rhi::VulkanDevice>(m_Device);
-    if (!vkDevice) return;
+    if (!vkDevice) {
+        METAGFX_INFO << "RenderImGui: Early exit - vkDevice null";
+        return;
+    }
 
     auto& context = vkDevice->GetContext();
     auto swapChain = m_Device->GetSwapChain();
-    if (!swapChain) return;
+    if (!swapChain) {
+        METAGFX_INFO << "RenderImGui: Early exit - swapChain null";
+        return;
+    }
 
     // Start ImGui frame
+    METAGFX_INFO << "RenderImGui: Calling ImGui_ImplVulkan_NewFrame";
     ImGui_ImplVulkan_NewFrame();
+    METAGFX_INFO << "RenderImGui: Calling ImGui_ImplSDL3_NewFrame";
     ImGui_ImplSDL3_NewFrame();
+    METAGFX_INFO << "RenderImGui: Calling ImGui::NewFrame";
     ImGui::NewFrame();
+    METAGFX_INFO << "RenderImGui: ImGui frame started";
 
     // Define UI
+    METAGFX_INFO << "RenderImGui: Creating UI";
     ImGui::Begin("MetaGFX Controls");
 
     // Model selection
@@ -1041,27 +1063,37 @@ void Application::RenderImGui() {
     }
 
     // Render ImGui
+    METAGFX_INFO << "RenderImGui: Calling ImGui::Render";
     ImGui::Render();
 
     // Check if there's anything to draw
     ImDrawData* drawData = ImGui::GetDrawData();
+    METAGFX_INFO << "RenderImGui: DrawData vertices=" << (drawData ? drawData->TotalVtxCount : -1);
     if (!drawData || drawData->TotalVtxCount == 0) {
+        METAGFX_INFO << "RenderImGui: No draw data, returning";
         return;  // Nothing to draw
     }
 
-    // Get current swap chain image
+    // Get image index from swap chain
+    METAGFX_INFO << "RenderImGui: Getting image index";
     auto vkSwapChain = std::static_pointer_cast<rhi::VulkanSwapChain>(swapChain);
-    if (!vkSwapChain) return;
-
+    if (!vkSwapChain) {
+        METAGFX_INFO << "RenderImGui: vkSwapChain is null";
+        return;
+    }
     uint32_t imageIndex = vkSwapChain->GetCurrentImageIndex();
-    auto backBuffer = swapChain->GetCurrentBackBuffer();
-    if (!backBuffer) return;
+    METAGFX_INFO << "RenderImGui: Image index=" << imageIndex;
 
     auto vkTexture = std::static_pointer_cast<rhi::VulkanTexture>(backBuffer);
-    if (!vkTexture) return;
+    if (!vkTexture) {
+        METAGFX_INFO << "RenderImGui: vkTexture is null";
+        return;
+    }
 
     // Create framebuffer if needed (lazy creation)
+    METAGFX_INFO << "RenderImGui: Checking framebuffer[" << imageIndex << "]";
     if (m_ImGuiFramebuffers[imageIndex] == VK_NULL_HANDLE) {
+        METAGFX_INFO << "RenderImGui: Creating framebuffer";
         VkImageView attachments[] = { vkTexture->GetImageView() };
 
         VkFramebufferCreateInfo framebufferInfo{};
@@ -1074,26 +1106,20 @@ void Application::RenderImGui() {
         framebufferInfo.layers = 1;
 
         vkCreateFramebuffer(context.device, &framebufferInfo, nullptr, &m_ImGuiFramebuffers[imageIndex]);
+        METAGFX_INFO << "RenderImGui: Framebuffer created";
     }
 
-    // Create a command buffer for ImGui rendering
-    auto imguiCmd = m_Device->CreateCommandBuffer();
-    auto vkImguiCmd = std::static_pointer_cast<rhi::VulkanCommandBuffer>(imguiCmd);
-    VkCommandBuffer commandBuffer = vkImguiCmd->GetHandle();
+    // Use the provided command buffer (already recording)
+    METAGFX_INFO << "RenderImGui: Getting command buffer handle";
+    auto vkCmd = std::static_pointer_cast<rhi::VulkanCommandBuffer>(cmd);
+    VkCommandBuffer commandBuffer = vkCmd->GetHandle();
 
-    VkCommandBufferBeginInfo beginInfo{};
-    beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-    beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-
-    vkBeginCommandBuffer(commandBuffer, &beginInfo);
-
-    // Transition image layout from COLOR_ATTACHMENT_OPTIMAL to PRESENT_SRC_KHR
+    // Transition image from PRESENT_SRC_KHR to COLOR_ATTACHMENT_OPTIMAL for ImGui render pass
+    METAGFX_INFO << "RenderImGui: Setting up image barrier";
     VkImageMemoryBarrier barrier{};
     barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-    barrier.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-    barrier.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-    barrier.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    barrier.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+    barrier.oldLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+    barrier.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
     barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     barrier.image = vkTexture->GetImage();
@@ -1102,17 +1128,16 @@ void Application::RenderImGui() {
     barrier.subresourceRange.levelCount = 1;
     barrier.subresourceRange.baseArrayLayer = 0;
     barrier.subresourceRange.layerCount = 1;
+    barrier.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    barrier.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
 
-    vkCmdPipelineBarrier(
-        commandBuffer,
-        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-        0,
-        0, nullptr,
-        0, nullptr,
-        1, &barrier
-    );
+    METAGFX_INFO << "RenderImGui: Recording pipeline barrier";
+    vkCmdPipelineBarrier(commandBuffer,
+                         VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                         VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                         0, 0, nullptr, 0, nullptr, 1, &barrier);
 
+    METAGFX_INFO << "RenderImGui: Setting up render pass";
     VkRenderPassBeginInfo renderPassInfo{};
     renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
     renderPassInfo.renderPass = m_ImGuiRenderPass;
@@ -1120,22 +1145,18 @@ void Application::RenderImGui() {
     renderPassInfo.renderArea.offset = {0, 0};
     renderPassInfo.renderArea.extent = {swapChain->GetWidth(), swapChain->GetHeight()};
 
+    METAGFX_INFO << "RenderImGui: Beginning render pass";
     vkCmdBeginRenderPass(commandBuffer, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
 
     // Record ImGui draw data
+    METAGFX_INFO << "RenderImGui: Recording ImGui draw data";
     ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), commandBuffer);
 
+    METAGFX_INFO << "RenderImGui: Ending render pass";
     vkCmdEndRenderPass(commandBuffer);
-    vkEndCommandBuffer(commandBuffer);
 
-    // Submit ImGui command buffer
-    VkSubmitInfo submitInfo{};
-    submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-    submitInfo.commandBufferCount = 1;
-    submitInfo.pCommandBuffers = &commandBuffer;
-
-    vkQueueSubmit(context.graphicsQueue, 1, &submitInfo, VK_NULL_HANDLE);
-    vkQueueWaitIdle(context.graphicsQueue);
+    METAGFX_INFO << "RenderImGui: EXIT";
+    // Note: Command buffer will be ended and submitted by Render() after this function returns
 }
 
 } // namespace metagfx

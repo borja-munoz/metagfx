@@ -58,7 +58,7 @@ private:
     // ImGui
     void InitImGui();
     void ShutdownImGui();
-    void RenderImGui();
+    void RenderImGui(Ref<rhi::CommandBuffer> cmd, Ref<rhi::Texture> backBuffer);
 
     ApplicationConfig m_Config;
     SDL_Window* m_Window = nullptr;
