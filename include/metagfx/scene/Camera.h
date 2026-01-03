@@ -47,6 +47,14 @@ public:
     const glm::vec3& GetOrbitTarget() const { return m_OrbitTarget; }
     float GetOrbitDistance() const { return m_OrbitDistance; }
 
+    /**
+     * @brief Frame the camera to view a bounding box with proper margins
+     * @param center Center of the bounding box
+     * @param size Size (extent) of the bounding box
+     * @param marginFactor Margin multiplier (1.0 = tight fit, 1.5 = 50% margin, default: 1.3)
+     */
+    void FrameBoundingBox(const glm::vec3& center, const glm::vec3& size, float marginFactor = 1.3f);
+
     // Getters
     const glm::mat4& GetViewMatrix() const { return m_ViewMatrix; }
     const glm::mat4& GetProjectionMatrix() const { return m_ProjectionMatrix; }

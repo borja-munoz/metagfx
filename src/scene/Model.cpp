@@ -14,6 +14,7 @@
 
 #include <glm/gtc/constants.hpp>
 #include <filesystem>
+#include <limits>
 
 namespace metagfx {
 
@@ -547,6 +548,52 @@ bool Model::CreateSphere(rhi::GraphicsDevice* device, float radius, uint32_t seg
 void Model::Cleanup() {
     m_Meshes.clear();
     m_FilePath.clear();
+}
+
+bool Model::GetBoundingBox(glm::vec3& outMin, glm::vec3& outMax) const {
+    if (m_Meshes.empty()) {
+        return false;
+    }
+
+    // Initialize with extreme values
+    outMin = glm::vec3(std::numeric_limits<float>::max());
+    outMax = glm::vec3(std::numeric_limits<float>::lowest());
+
+    // Iterate through all meshes and all vertices
+    for (const auto& mesh : m_Meshes) {
+        const auto& vertices = mesh->GetVertices();
+        for (const auto& vertex : vertices) {
+            outMin = glm::min(outMin, vertex.position);
+            outMax = glm::max(outMax, vertex.position);
+        }
+    }
+
+    return true;
+}
+
+glm::vec3 Model::GetCenter() const {
+    glm::vec3 min, max;
+    if (!GetBoundingBox(min, max)) {
+        return glm::vec3(0.0f);
+    }
+    return (min + max) * 0.5f;
+}
+
+glm::vec3 Model::GetSize() const {
+    glm::vec3 min, max;
+    if (!GetBoundingBox(min, max)) {
+        return glm::vec3(0.0f);
+    }
+    return max - min;
+}
+
+float Model::GetBoundingSphereRadius() const {
+    glm::vec3 min, max;
+    if (!GetBoundingBox(min, max)) {
+        return 0.0f;
+    }
+    glm::vec3 center = (min + max) * 0.5f;
+    return glm::length(max - center);
 }
 
 } // namespace metagfx

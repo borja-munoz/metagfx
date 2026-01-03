@@ -305,6 +305,23 @@ void Application::LoadModel(const std::string& path) {
     size_t lastSlash = path.find_last_of("/\\");
     std::string modelName = (lastSlash != std::string::npos) ? path.substr(lastSlash + 1) : path;
     METAGFX_INFO << "Model loaded: " << modelName;
+
+    // Automatically frame camera to view the entire model
+    glm::vec3 center = m_Model->GetCenter();
+    glm::vec3 size = m_Model->GetSize();
+    float radius = m_Model->GetBoundingSphereRadius();
+
+    METAGFX_INFO << "Model bounds - Center: (" << center.x << ", " << center.y << ", " << center.z << ")";
+    METAGFX_INFO << "Model bounds - Size: (" << size.x << ", " << size.y << ", " << size.z << ")";
+    METAGFX_INFO << "Model bounds - Bounding sphere radius: " << radius;
+
+    // Frame the camera to view the model with 30% margin
+    m_Camera->FrameBoundingBox(center, size, 1.3f);
+
+    METAGFX_INFO << "Camera framed at position: ("
+                 << m_Camera->GetPosition().x << ", "
+                 << m_Camera->GetPosition().y << ", "
+                 << m_Camera->GetPosition().z << ")";
 }
 
 void Application::LoadNextModel() {
@@ -651,11 +668,8 @@ void Application::Render() {
 
     // Update uniform buffer
     UniformBufferObject ubo{};
-    // Model matrix: flip upside down, then scale up (transformations applied right-to-left)
+    // Model matrix: identity (no transformation)
     glm::mat4 modelMatrix = glm::mat4(1.0f);
-    //     modelMatrix = glm::rotate(modelMatrix, glm::radians(180.0f), glm::vec3(1.0f, 0.0f, 0.0f));  // Flip upside down
-    modelMatrix = glm::scale(modelMatrix, glm::vec3(10.0f));  // Scale up tiny models (bunny is ~0.17 units)
-    // No Y rotation - let's see what the default orientation shows
     ubo.model = modelMatrix;
     ubo.view = m_Camera->GetViewMatrix();
     ubo.projection = m_Camera->GetProjectionMatrix();

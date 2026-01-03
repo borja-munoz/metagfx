@@ -232,4 +232,67 @@ void Camera::ZoomToTarget(float delta) {
     m_ViewMatrix = glm::lookAt(m_Position, m_OrbitTarget, m_WorldUp);
 }
 
+void Camera::FrameBoundingBox(const glm::vec3& center, const glm::vec3& size, float marginFactor) {
+    // Apply margin to the size
+    glm::vec3 adjustedSize = size * marginFactor;
+
+    // Calculate the radius of the bounding sphere
+    float radius = glm::length(adjustedSize) * 0.5f;
+
+    // Calculate the distance needed to fit the sphere in view
+    // We need to account for both vertical and horizontal FOV
+    float fovRadians = glm::radians(m_FOV);
+
+    // Calculate distance for vertical FOV
+    float distanceVertical = radius / std::tan(fovRadians * 0.5f);
+
+    // Calculate distance for horizontal FOV (accounting for aspect ratio)
+    float horizontalFov = 2.0f * std::atan(std::tan(fovRadians * 0.5f) * m_AspectRatio);
+    float distanceHorizontal = radius / std::tan(horizontalFov * 0.5f);
+
+    // Use the larger distance to ensure model fits in both dimensions
+    float distance = glm::max(distanceVertical, distanceHorizontal);
+
+    // No additional multiplier - the margin factor already provides spacing
+    // Ensure minimum distance to avoid near plane clipping
+    distance = glm::max(distance, radius * 1.2f);
+
+    // Position camera at a 45-degree angle (front-top-right view)
+    // This provides a good default viewing angle for most models
+    float yawRad = glm::radians(45.0f);
+    float pitchRad = glm::radians(20.0f);  // Reduced from 30 to 20 degrees for lower viewpoint
+
+    glm::vec3 offset;
+    offset.x = distance * cos(pitchRad) * cos(yawRad);
+    offset.y = distance * sin(pitchRad);
+    offset.z = distance * cos(pitchRad) * sin(yawRad);
+
+    // Calculate camera position from the center
+    m_Position = center + offset;
+
+    // For the look-at target, aim lower to see more of the top of the model
+    // This keeps the camera at its calculated position but looks down slightly
+    glm::vec3 adjustedCenter = center;
+    adjustedCenter.y -= size.y * 0.15f;  // Look slightly below center to capture top features
+
+    // Set orbital camera to target the adjusted center (raised for better framing)
+    m_OrbitTarget = adjustedCenter;
+    m_OrbitDistance = distance;
+    m_OrbitYaw = 45.0f;
+    m_OrbitPitch = 20.0f;  // Match the reduced pitch angle
+
+    // Update view matrix to look at the adjusted center
+    m_ViewMatrix = glm::lookAt(m_Position, adjustedCenter, m_WorldUp);
+
+    // Update camera vectors
+    m_Front = glm::normalize(adjustedCenter - m_Position);
+    m_Right = glm::normalize(glm::cross(m_Front, m_WorldUp));
+    m_Up = glm::normalize(glm::cross(m_Right, m_Front));
+
+    // Adjust far plane if needed to accommodate the model
+    if (distance + radius > m_FarPlane * 0.8f) {
+        SetPerspective(m_FOV, m_AspectRatio, m_NearPlane, (distance + radius) * 2.0f);
+    }
+}
+
 } // namespace metagfx

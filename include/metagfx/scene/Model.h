@@ -72,6 +72,29 @@ public:
     size_t GetMeshCount() const { return m_Meshes.size(); }
     const std::string& GetFilePath() const { return m_FilePath; }
 
+    /**
+     * @brief Calculate the bounding box of the entire model
+     * @param outMin Output parameter for minimum corner
+     * @param outMax Output parameter for maximum corner
+     * @return true if bounding box was calculated, false if model is empty
+     */
+    bool GetBoundingBox(glm::vec3& outMin, glm::vec3& outMax) const;
+
+    /**
+     * @brief Get the center point of the model's bounding box
+     */
+    glm::vec3 GetCenter() const;
+
+    /**
+     * @brief Get the size (extent) of the model's bounding box
+     */
+    glm::vec3 GetSize() const;
+
+    /**
+     * @brief Get the radius of the bounding sphere (distance from center to farthest corner)
+     */
+    float GetBoundingSphereRadius() const;
+
 private:
     std::vector<std::unique_ptr<Mesh>> m_Meshes;
     std::string m_FilePath;
