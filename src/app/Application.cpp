@@ -1095,10 +1095,10 @@ void Application::RenderImGui(Ref<rhi::CommandBuffer> cmd, Ref<rhi::Texture> bac
 
     // Model selection
     const char* modelNames[] = {
+        "Antique Camera",
+        "Bunny",
         "Damaged Helmet",
-        "Metal Rough Spheres",
-        "Bunny (Textured)",
-        "Bunny"
+        "Metal Rough Spheres"
     };
     int currentModel = m_CurrentModelIndex;
     if (ImGui::Combo("Model", &currentModel, modelNames, IM_ARRAYSIZE(modelNames))) {
