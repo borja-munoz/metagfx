@@ -274,12 +274,12 @@ void Application::Init() {
 
     // Initialize available models list
     m_AvailableModels = {
-        "/Users/Borja/dev/borja-munoz/metagfx/assets/models/DamagedHelmet.glb",
-        "/Users/Borja/dev/borja-munoz/metagfx/assets/models/MetalRoughSpheres.glb",
+        "/Users/Borja/dev/borja-munoz/metagfx/assets/models/AntiqueCamera.glb",
         "/Users/Borja/dev/borja-munoz/metagfx/assets/models/bunny_tex_coords.obj",
-        "/Users/Borja/dev/borja-munoz/metagfx/assets/models/bunny.obj"
+        "/Users/Borja/dev/borja-munoz/metagfx/assets/models/DamagedHelmet.glb",
+        "/Users/Borja/dev/borja-munoz/metagfx/assets/models/MetalRoughSpheres.glb"
     };
-    m_CurrentModelIndex = 3;  // Start with bunny (non-textured)
+    m_CurrentModelIndex = 2;  
 
     // Load initial model
     LoadModel(m_AvailableModels[m_CurrentModelIndex]);
