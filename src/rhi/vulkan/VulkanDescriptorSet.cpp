@@ -31,7 +31,7 @@ VulkanDescriptorSet::~VulkanDescriptorSet() {
 
 void VulkanDescriptorSet::CreateLayout(const std::vector<DescriptorBinding>& bindings) {
     std::vector<VkDescriptorSetLayoutBinding> layoutBindings;
-    
+
     for (const auto& binding : bindings) {
         VkDescriptorSetLayoutBinding layoutBinding{};
         layoutBinding.binding = binding.binding;
@@ -39,15 +39,15 @@ void VulkanDescriptorSet::CreateLayout(const std::vector<DescriptorBinding>& bin
         layoutBinding.descriptorCount = 1;
         layoutBinding.stageFlags = binding.stageFlags;
         layoutBinding.pImmutableSamplers = nullptr;
-        
+
         layoutBindings.push_back(layoutBinding);
     }
-    
+
     VkDescriptorSetLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
     layoutInfo.bindingCount = static_cast<uint32>(layoutBindings.size());
     layoutInfo.pBindings = layoutBindings.data();
-    
+
     VK_CHECK(vkCreateDescriptorSetLayout(m_Context.device, &layoutInfo, nullptr, &m_Layout));
 }
 

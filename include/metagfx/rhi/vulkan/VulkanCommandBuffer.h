@@ -48,6 +48,11 @@ public:
     void PushConstants(VkPipelineLayout layout, VkShaderStageFlags stageFlags,
                       uint32 offset, uint32 size, const void* data);
 
+    // Pipeline barrier for buffer memory synchronization
+    void BufferMemoryBarrier(VkBuffer buffer, VkDeviceSize offset, VkDeviceSize size,
+                            VkPipelineStageFlags srcStage, VkPipelineStageFlags dstStage,
+                            VkAccessFlags srcAccess, VkAccessFlags dstAccess);
+
 private:
     VulkanContext& m_Context;
     VkCommandPool m_CommandPool;

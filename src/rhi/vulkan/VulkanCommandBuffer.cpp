@@ -194,5 +194,29 @@ void VulkanCommandBuffer::PushConstants(VkPipelineLayout layout, VkShaderStageFl
     vkCmdPushConstants(m_CommandBuffer, layout, stageFlags, offset, size, data);
 }
 
+void VulkanCommandBuffer::BufferMemoryBarrier(VkBuffer buffer, VkDeviceSize offset, VkDeviceSize size,
+                                             VkPipelineStageFlags srcStage, VkPipelineStageFlags dstStage,
+                                             VkAccessFlags srcAccess, VkAccessFlags dstAccess) {
+    VkBufferMemoryBarrier barrier{};
+    barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+    barrier.srcAccessMask = srcAccess;
+    barrier.dstAccessMask = dstAccess;
+    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.buffer = buffer;
+    barrier.offset = offset;
+    barrier.size = size;
+
+    vkCmdPipelineBarrier(
+        m_CommandBuffer,
+        srcStage,
+        dstStage,
+        0,
+        0, nullptr,
+        1, &barrier,
+        0, nullptr
+    );
+}
+
 } // namespace rhi
 } // namespace metagfx

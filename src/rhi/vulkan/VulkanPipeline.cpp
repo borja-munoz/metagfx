@@ -123,9 +123,11 @@ VulkanPipeline::VulkanPipeline(VulkanContext& context, const PipelineDesc& desc,
     pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
 
     if (descriptorSetLayout != VK_NULL_HANDLE) {
+        METAGFX_INFO << "Pipeline using descriptor set layout: " << descriptorSetLayout;
         pipelineLayoutInfo.setLayoutCount = 1;
         pipelineLayoutInfo.pSetLayouts = &descriptorSetLayout;
     } else {
+        METAGFX_WARN << "Pipeline created WITHOUT descriptor set layout!";
         pipelineLayoutInfo.setLayoutCount = 0;
     }
 

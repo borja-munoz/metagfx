@@ -27,8 +27,9 @@ struct LightData {
     vec4 spotAngles;         // x=innerAngle, y=outerAngle, z=attConst, w=attLinear
 };
 
-// Light buffer uniform (binding 3)
-layout(binding = 3) uniform LightBuffer {
+// Light buffer storage (set 0, binding = 3) - CHANGED TO STORAGE BUFFER for MoltenVK compatibility
+// CRITICAL: Must match CPU struct exactly - uint lightCount + uint padding[3]
+layout(set = 0, binding = 3, std430) readonly buffer LightBuffer {
     uint lightCount;
     uint padding[3];
     LightData lights[16];
@@ -305,7 +306,9 @@ void main() {
 
     // Ambient lighting (simple approximation, will be replaced by IBL in Phase 3)
     // Apply AO to ambient term
-    vec3 ambient = vec3(0.6) * albedo * ao;  // High ambient for better visibility
+    // Note: Using 0.15 as a compromise - too low (0.03) looks too dark without IBL,
+    // too high (0.6) washes out the lighting. Will be replaced by proper IBL later.
+    vec3 ambient = vec3(0.15) * albedo * ao;
 
     // Final color: ambient + direct lighting
     vec3 color = ambient + Lo;
@@ -324,21 +327,25 @@ void main() {
     // Uncomment ONE of these lines to visualize different PBR properties
     // ============================================================================
 
-    // Material properties
+    // Material properties (DEBUG - uncomment to visualize)
     // outColor = vec4(albedo, 1.0);                // Albedo color (base color)
     // outColor = vec4(vec3(metallic), 1.0);        // Metallic map (grayscale)
     // outColor = vec4(vec3(roughness), 1.0);       // Roughness map (grayscale)
     // outColor = vec4(vec3(ao), 1.0);              // Ambient Occlusion (grayscale)
 
-    // Normals
-    // outColor = vec4(N * 0.5 + 0.5, 1.0);         // World-space normals as RGB
+    // Normals (DEBUG - uncomment to visualize)
+    // outColor = vec4(N * 0.5 + 0.5, 1.0); return;         // World-space normals as RGB
     // outColor = vec4(normalize(fragNormal) * 0.5 + 0.5, 1.0);  // Vertex normals (before normal map)
 
-    // Lighting components
+    // Lighting components (DEBUG - uncomment to visualize)
     // outColor = vec4(ambient, 1.0);               // Ambient contribution only
-    // outColor = vec4(Lo, 1.0);                    // Direct lighting only
+    // outColor = vec4(Lo, 1.0); return;                    // Direct lighting only
+    // outColor = vec4(color, 1.0); return;         // Color before tone mapping
 
-    // Advanced visualization
+    // DEBUG: Visualize light count
+    // outColor = vec4(vec3(float(lightBuffer.lightCount) / 4.0), 1.0); return;
+
+    // Advanced visualization (DEBUG - uncomment to visualize)
     // outColor = vec4(vec3(max(dot(N, V), 0.0)), 1.0);  // N·V (fresnel term)
     // float avgLight = (Lo.r + Lo.g + Lo.b) / 3.0;
     // outColor = vec4(vec3(avgLight), 1.0);        // Grayscale lighting intensity

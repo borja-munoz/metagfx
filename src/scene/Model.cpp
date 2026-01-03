@@ -252,6 +252,23 @@ static std::unique_ptr<Mesh> ProcessMesh(rhi::GraphicsDevice* device, aiMesh* ai
 
     // Process vertices
     vertices.reserve(aiMesh->mNumVertices);
+
+    // DEBUG: Log normal availability
+    if (!aiMesh->HasNormals()) {
+        METAGFX_WARN << "Mesh has NO normals! Using default up vector.";
+    } else {
+        METAGFX_INFO << "Mesh has normals: " << aiMesh->mNumVertices << " vertices";
+        // Log first 3 normals to verify they vary
+        if (aiMesh->mNumVertices >= 3) {
+            METAGFX_INFO << "  Normal[0]: (" << aiMesh->mNormals[0].x << ", "
+                         << aiMesh->mNormals[0].y << ", " << aiMesh->mNormals[0].z << ")";
+            METAGFX_INFO << "  Normal[1]: (" << aiMesh->mNormals[1].x << ", "
+                         << aiMesh->mNormals[1].y << ", " << aiMesh->mNormals[1].z << ")";
+            METAGFX_INFO << "  Normal[2]: (" << aiMesh->mNormals[2].x << ", "
+                         << aiMesh->mNormals[2].y << ", " << aiMesh->mNormals[2].z << ")";
+        }
+    }
+
     for (uint32_t i = 0; i < aiMesh->mNumVertices; ++i) {
         Vertex vertex;
 
@@ -346,13 +363,13 @@ bool Model::LoadFromFile(rhi::GraphicsDevice* device, const std::string& filepat
     // Load the model with post-processing
     // aiProcess_Triangulate: Convert all primitives to triangles
     // aiProcess_FlipUVs: Flip texture coordinates on Y axis (OpenGL convention)
-    // aiProcess_GenNormals: Generate normals if not present
+    // aiProcess_GenSmoothNormals: Generate smooth normals if not present (for proper shading)
     // aiProcess_CalcTangentSpace: Calculate tangents/bitangents (for normal mapping later)
     // aiProcess_JoinIdenticalVertices: Optimize by merging identical vertices
     const aiScene* scene = importer.ReadFile(filepath,
         aiProcess_Triangulate |
         aiProcess_FlipUVs |
-        aiProcess_GenNormals |
+        aiProcess_GenSmoothNormals |  // Use smooth normals instead of flat
         aiProcess_CalcTangentSpace |
         aiProcess_JoinIdenticalVertices
     );

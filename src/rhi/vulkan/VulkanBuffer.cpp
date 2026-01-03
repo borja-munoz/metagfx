@@ -72,6 +72,15 @@ void VulkanBuffer::Unmap() {
 void VulkanBuffer::CopyData(const void* data, uint64 size, uint64 offset) {
     void* mapped = Map();
     memcpy(static_cast<char*>(mapped) + offset, data, size);
+
+    // Flush mapped memory to make writes visible to GPU
+    VkMappedMemoryRange range{};
+    range.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE;
+    range.memory = m_Memory;
+    range.offset = offset;
+    range.size = size;
+    VK_CHECK(vkFlushMappedMemoryRanges(m_Context.device, 1, &range));
+
     Unmap();
 }
 
