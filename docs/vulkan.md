@@ -19,10 +19,27 @@ The swap chain uses double-buffering with:
 
 ### Render Pass
 
-- Created dynamically in BeginRendering()
-- Simple single-subpass configuration
-- Clear on load, store on finish
-- Will be optimized in later milestones
+MetaGFX currently uses the **legacy Vulkan render pass API** (`vkCmdBeginRenderPass` / `vkCmdEndRenderPass`), not the modern dynamic rendering extension (`VK_KHR_dynamic_rendering`).
+
+**Current Implementation:**
+- Render pass and framebuffer are created dynamically per-frame in `BeginRendering()`
+- Simple single-subpass configuration with one color attachment
+- Clear on load (`VK_ATTACHMENT_LOAD_OP_CLEAR`), store on finish (`VK_ATTACHMENT_STORE_OP_STORE`)
+- Render pass and framebuffer are destroyed in the command buffer destructor
+
+**Design Rationale:**
+The abstract RHI uses forward-thinking API names (`BeginRendering()` / `EndRendering()`) that mirror Vulkan 1.3's dynamic rendering, but the Vulkan backend implements this using traditional render passes for maximum compatibility. This approach:
+- Works on all Vulkan 1.0+ implementations, including MoltenVK on macOS
+- Provides a clean migration path to dynamic rendering in the future
+- Keeps the RHI abstraction modern and future-proof
+
+**Trade-offs:**
+- Creating render passes and framebuffers per-frame has some CPU overhead
+- Dynamic rendering (Vulkan 1.3+) would be slightly more efficient and eliminate this overhead
+- For production, consider either caching render passes/framebuffers or migrating to `VK_KHR_dynamic_rendering`
+
+**Future Optimization:**
+A future milestone may add dynamic rendering support as an optional code path, using the legacy render pass API as a fallback for older drivers and MoltenVK.
 
 ### Pipeline State
 
