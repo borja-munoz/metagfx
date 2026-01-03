@@ -95,6 +95,7 @@ private:
     Ref<rhi::Texture> m_DefaultTexture;  // Checker pattern for albedo
     Ref<rhi::Texture> m_DefaultNormalMap;  // Flat normal map (128,128,255)
     Ref<rhi::Texture> m_DefaultWhiteTexture;  // White 1x1 for metallic/roughness/AO
+    Ref<rhi::Texture> m_DepthBuffer;  // Depth buffer for 3D rendering
 
     // Scene and model
     std::unique_ptr<Scene> m_Scene;

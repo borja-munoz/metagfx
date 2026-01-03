@@ -41,6 +41,9 @@ VulkanTexture::VulkanTexture(VulkanContext& context, const TextureDesc& desc)
     if (static_cast<uint32>(desc.usage) & static_cast<uint32>(TextureUsage::ColorAttachment)) {
         imageInfo.usage |= VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
     }
+    if (static_cast<uint32>(desc.usage) & static_cast<uint32>(TextureUsage::DepthStencilAttachment)) {
+        imageInfo.usage |= VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+    }
 
     imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
     imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
@@ -66,7 +69,10 @@ VulkanTexture::VulkanTexture(VulkanContext& context, const TextureDesc& desc)
     viewInfo.image = m_Image;
     viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
     viewInfo.format = m_VkFormat;
-    viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+
+    // Set correct aspect mask based on format
+    bool isDepthFormat = (static_cast<uint32>(desc.usage) & static_cast<uint32>(TextureUsage::DepthStencilAttachment)) != 0;
+    viewInfo.subresourceRange.aspectMask = isDepthFormat ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT;
     viewInfo.subresourceRange.baseMipLevel = 0;
     viewInfo.subresourceRange.levelCount = 1;
     viewInfo.subresourceRange.baseArrayLayer = 0;
@@ -74,8 +80,13 @@ VulkanTexture::VulkanTexture(VulkanContext& context, const TextureDesc& desc)
 
     VK_CHECK(vkCreateImageView(m_Context.device, &viewInfo, nullptr, &m_ImageView));
 
-    // Transition to shader read layout (initial state)
-    TransitionImageLayout(VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    // Transition to appropriate layout based on usage
+    if (isDepthFormat) {
+        // Depth attachments don't need initial transition - they're transitioned by the render pass
+    } else {
+        // Transition to shader read layout (initial state) for color/sampled textures
+        TransitionImageLayout(VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    }
 
     METAGFX_INFO << "Created texture: " << desc.width << "x" << desc.height;
 }

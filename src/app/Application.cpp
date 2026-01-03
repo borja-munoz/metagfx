@@ -168,6 +168,16 @@ void Application::Init() {
         m_Device.get(), whiteImage, rhi::Format::R8G8B8A8_UNORM
     );
 
+    // Create depth buffer for 3D rendering
+    auto swapChain = m_Device->GetSwapChain();
+    rhi::TextureDesc depthDesc{};
+    depthDesc.width = swapChain->GetWidth();
+    depthDesc.height = swapChain->GetHeight();
+    depthDesc.format = rhi::Format::D32_SFLOAT;
+    depthDesc.usage = rhi::TextureUsage::DepthStencilAttachment;
+    depthDesc.debugName = "DepthBuffer";
+    m_DepthBuffer = m_Device->CreateTexture(depthDesc);
+
     // Create scene and initialize light buffer
     m_Scene = std::make_unique<Scene>();
     m_Scene->InitializeLightBuffer(m_Device.get());
@@ -609,6 +619,16 @@ void Application::ProcessEvents() {
                         static_cast<float>(event.window.data1) /
                         static_cast<float>(event.window.data2)
                     );
+
+                    // Recreate depth buffer with new dimensions
+                    m_DepthBuffer.reset();
+                    rhi::TextureDesc depthDesc{};
+                    depthDesc.width = event.window.data1;
+                    depthDesc.height = event.window.data2;
+                    depthDesc.format = rhi::Format::D32_SFLOAT;
+                    depthDesc.usage = rhi::TextureUsage::DepthStencilAttachment;
+                    depthDesc.debugName = "DepthBuffer";
+                    m_DepthBuffer = m_Device->CreateTexture(depthDesc);
                 }
                 break;
         }
@@ -704,13 +724,17 @@ void Application::Render() {
     }
     
     // Begin rendering
-    ClearValue clearValue{};
-    clearValue.color[0] = 0.1f;
-    clearValue.color[1] = 0.1f;
-    clearValue.color[2] = 0.15f;
-    clearValue.color[3] = 1.0f;
-    
-    cmd->BeginRendering({ backBuffer }, nullptr, { clearValue });
+    ClearValue colorClear{};
+    colorClear.color[0] = 0.1f;
+    colorClear.color[1] = 0.1f;
+    colorClear.color[2] = 0.15f;
+    colorClear.color[3] = 1.0f;
+
+    ClearValue depthClear{};
+    depthClear.depthStencil.depth = 1.0f;
+    depthClear.depthStencil.stencil = 0;
+
+    cmd->BeginRendering({ backBuffer }, m_DepthBuffer, { colorClear, depthClear });
     
     // Set viewport and scissor
     Viewport viewport{};
@@ -880,6 +904,7 @@ void Application::Shutdown() {
     m_DefaultTexture.reset();         // Clean up before device
     m_DefaultNormalMap.reset();       // Clean up before device
     m_DefaultWhiteTexture.reset();    // Clean up before device
+    m_DepthBuffer.reset();            // Clean up before device
     m_LinearRepeatSampler.reset();    // Clean up before device
     m_Device.reset();
     
