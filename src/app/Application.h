@@ -97,6 +97,12 @@ private:
     Ref<rhi::Texture> m_DefaultWhiteTexture;  // White 1x1 for metallic/roughness/AO
     Ref<rhi::Texture> m_DepthBuffer;  // Depth buffer for 3D rendering
 
+    // IBL (Image-Based Lighting) resources
+    Ref<rhi::Sampler> m_CubemapSampler;  // Linear filtering for cubemaps
+    Ref<rhi::Texture> m_IrradianceMap;   // Diffuse irradiance cubemap
+    Ref<rhi::Texture> m_PrefilteredMap;  // Specular prefiltered cubemap
+    Ref<rhi::Texture> m_BRDF_LUT;        // BRDF integration lookup table
+
     // Scene and model
     std::unique_ptr<Scene> m_Scene;
     std::unique_ptr<Model> m_Model;
@@ -121,6 +127,8 @@ private:
 
     // GUI parameters
     float m_Exposure = 1.0f;
+    bool m_EnableIBL = true;  // Enable/disable Image-Based Lighting
+    float m_IBLIntensity = 0.05f;  // IBL contribution multiplier (default: very subtle)
     bool m_ShowDemoWindow = false;
 };
 

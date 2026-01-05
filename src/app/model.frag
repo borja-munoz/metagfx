@@ -19,6 +19,11 @@ layout(binding = 5) uniform sampler2D metallicSampler;
 layout(binding = 6) uniform sampler2D roughnessSampler;
 layout(binding = 7) uniform sampler2D aoSampler;
 
+// IBL texture samplers
+layout(binding = 8) uniform samplerCube irradianceMap;
+layout(binding = 9) uniform samplerCube prefilteredMap;
+layout(binding = 10) uniform sampler2D brdfLUT;
+
 // Light data structure (64 bytes, matches CPU struct)
 struct LightData {
     vec4 positionAndType;    // xyz=position, w=type (0=dir, 1=point, 2=spot)
@@ -35,12 +40,13 @@ layout(set = 0, binding = 3, std430) readonly buffer LightBuffer {
     LightData lights[16];
 } lightBuffer;
 
-// Push constants for camera position, material flags, and exposure
+// Push constants for camera position, material flags, exposure, and IBL toggle
 layout(push_constant) uniform PushConstants {
     vec4 cameraPosition;
     uint materialFlags;
     float exposure;
-    uint padding[2];
+    uint enableIBL;  // 0 = disabled, 1 = enabled
+    float iblIntensity;  // IBL contribution multiplier
 } pushConstants;
 
 // Output color
@@ -93,6 +99,11 @@ float GeometrySmith(vec3 N, vec3 V, vec3 L, float roughness) {
 // Describes how much light is reflected vs. refracted
 vec3 FresnelSchlick(float cosTheta, vec3 F0) {
     return F0 + (1.0 - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
+}
+
+// Fresnel-Schlick with roughness for IBL
+vec3 FresnelSchlickRoughness(float cosTheta, vec3 F0, float roughness) {
+    return F0 + (max(vec3(1.0 - roughness), F0) - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
 }
 
 // ============================================================================
@@ -287,8 +298,14 @@ void main() {
     // Minimum value of 0.04 provides reasonable results for smooth surfaces
     roughness = max(roughness, 0.04);
 
-    // Prepare view direction
+    // Prepare view direction and calculate base reflectivity
     vec3 V = normalize(pushConstants.cameraPosition.xyz - fragPosition);
+    float NdotV = max(dot(N, V), 0.0);
+
+    // Calculate F0 (surface reflection at zero incidence)
+    // For dielectrics, F0 is typically 0.04
+    // For metals, F0 is the albedo color
+    vec3 F0 = mix(vec3(0.04), albedo, metallic);
 
     // Accumulate lighting from all lights using PBR
     vec3 Lo = vec3(0.0);
@@ -304,20 +321,65 @@ void main() {
         );
     }
 
-    // Ambient lighting (simple approximation, will be replaced by IBL in Phase 3)
-    // Apply AO to ambient term
-    // Note: Using 0.15 as a compromise - too low (0.03) looks too dark without IBL,
-    // too high (0.6) washes out the lighting. Will be replaced by proper IBL later.
-    vec3 ambient = vec3(0.15) * albedo * ao;
+    // ============================================================================
+    // Image-Based Lighting (IBL)
+    // ============================================================================
 
-    // Final color: ambient + direct lighting
+    // Declare IBL variables for debug visualization
+    vec3 ambient;
+    vec3 diffuseIBL = vec3(0.0);
+    vec3 specularIBL = vec3(0.0);
+    vec3 irradiance = vec3(0.0);
+    vec3 prefilteredColor = vec3(0.0);
+    vec2 brdf = vec2(0.0);
+
+    if (pushConstants.enableIBL != 0u) {
+        // IBL enabled: use environment maps for realistic ambient lighting
+
+        // Reflection vector for specular IBL
+        vec3 R = reflect(-V, N);
+
+        // --- Diffuse IBL (Irradiance) ---
+        // Sample irradiance map with the normal direction
+        irradiance = texture(irradianceMap, N).rgb;
+
+        // Calculate diffuse component
+        // kD represents the refracted light (diffuse)
+        // For energy conservation: kD = 1 - kS (where kS is Fresnel)
+        vec3 F = FresnelSchlickRoughness(NdotV, F0, roughness);
+        vec3 kD = (1.0 - F) * (1.0 - metallic); // Metals have no diffuse
+
+        diffuseIBL = kD * irradiance * albedo;
+
+        // --- Specular IBL (Prefiltered Environment + BRDF LUT) ---
+        // Sample prefiltered environment map based on roughness
+        const float MAX_REFLECTION_LOD = 5.0; // Number of mip levels - 1
+        float lod = roughness * MAX_REFLECTION_LOD;
+        prefilteredColor = textureLod(prefilteredMap, R, lod).rgb;
+
+        // Sample BRDF integration map (split-sum approximation)
+        brdf = texture(brdfLUT, vec2(NdotV, roughness)).rg;
+
+        // Combine prefiltered color with BRDF
+        specularIBL = prefilteredColor * (F * brdf.x + brdf.y);
+
+        // Combine diffuse and specular IBL
+        // Scale by user-controlled intensity
+        ambient = (diffuseIBL + specularIBL) * pushConstants.iblIntensity;
+    } else {
+        // IBL disabled: use simple constant ambient lighting
+        ambient = vec3(0.03) * albedo * ao;
+    }
+
+    // Final color: IBL ambient + direct lighting
     vec3 color = ambient + Lo;
 
     // Apply exposure control
     color = color * pushConstants.exposure;
 
     // Apply tone mapping (HDR to LDR)
-    color = toneMapACES(color);
+    // NOTE: Using simple clamp instead of ACES - ACES was causing black artifacts with IBL
+    color = clamp(color, 0.0, 1.0);
 
     // Gamma correction (convert from linear to sRGB)
     color = pow(color, vec3(1.0/2.2));
@@ -338,9 +400,16 @@ void main() {
     // outColor = vec4(normalize(fragNormal) * 0.5 + 0.5, 1.0);  // Vertex normals (before normal map)
 
     // Lighting components (DEBUG - uncomment to visualize)
-    // outColor = vec4(ambient, 1.0);               // Ambient contribution only
-    // outColor = vec4(Lo, 1.0); return;                    // Direct lighting only
+    // outColor = vec4(ambient, 1.0); return;       // IBL ambient contribution only
+    // outColor = vec4(Lo, 1.0); return;            // Direct lighting only
     // outColor = vec4(color, 1.0); return;         // Color before tone mapping
+
+    // IBL components (DEBUG - uncomment to visualize IBL)
+    // outColor = vec4(diffuseIBL * 2.0, 1.0); return;    // Diffuse IBL only (scaled 2x for viewing)
+    // outColor = vec4(specularIBL, 1.0); return;   // Specular IBL only (prefiltered + BRDF)
+    // outColor = vec4(irradiance * 0.5, 1.0); return;    // Raw irradiance map sample (scaled for viewing)
+    // outColor = vec4(prefilteredColor * 0.5, 1.0); return; // Raw prefiltered map sample (scaled for viewing)
+    // outColor = vec4(vec3(brdf, 0.0), 1.0); return;  // BRDF LUT (RG only)
 
     // DEBUG: Visualize light count
     // outColor = vec4(vec3(float(lightBuffer.lightCount) / 4.0), 1.0); return;

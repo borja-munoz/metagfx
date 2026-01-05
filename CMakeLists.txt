@@ -53,6 +53,9 @@ add_subdirectory(src/scene)
 add_subdirectory(src/renderer)
 add_subdirectory(src/app)
 
+# Tools
+add_subdirectory(tools/ibl_precompute)
+
 # Tests
 if(METAGFX_BUILD_TESTS)
     enable_testing()

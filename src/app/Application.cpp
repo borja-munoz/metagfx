@@ -178,6 +178,62 @@ void Application::Init() {
     depthDesc.debugName = "DepthBuffer";
     m_DepthBuffer = m_Device->CreateTexture(depthDesc);
 
+    // Create cubemap sampler for IBL textures
+    rhi::SamplerDesc cubemapSamplerDesc{};
+    cubemapSamplerDesc.minFilter = rhi::Filter::Linear;
+    cubemapSamplerDesc.magFilter = rhi::Filter::Linear;
+    cubemapSamplerDesc.mipmapMode = rhi::Filter::Linear;  // Enable mipmap filtering for prefiltered map
+    cubemapSamplerDesc.addressModeU = rhi::SamplerAddressMode::ClampToEdge;
+    cubemapSamplerDesc.addressModeV = rhi::SamplerAddressMode::ClampToEdge;
+    cubemapSamplerDesc.addressModeW = rhi::SamplerAddressMode::ClampToEdge;
+    m_CubemapSampler = m_Device->CreateSampler(cubemapSamplerDesc);
+
+    // Load IBL textures (Image-Based Lighting)
+    // These textures are pre-computed using the ibl_precompute tool
+    METAGFX_INFO << "Loading IBL textures...";
+    m_IrradianceMap = utils::LoadDDSCubemap(m_Device.get(),
+        "/Users/Borja/dev/borja-munoz/metagfx/assets/envmaps/irradiance.dds");
+    m_PrefilteredMap = utils::LoadDDSCubemap(m_Device.get(),
+        "/Users/Borja/dev/borja-munoz/metagfx/assets/envmaps/prefiltered.dds");
+    m_BRDF_LUT = utils::LoadDDS2DTexture(m_Device.get(),
+        "/Users/Borja/dev/borja-munoz/metagfx/assets/envmaps/brdf_lut.dds");
+
+    if (!m_IrradianceMap || !m_PrefilteredMap || !m_BRDF_LUT) {
+        METAGFX_WARN << "Failed to load IBL textures! Using fallback textures.";
+        METAGFX_WARN << "IBL will be disabled. Generate textures using: ./bin/tools/ibl_precompute <input.hdr> assets/envmaps/studio/";
+
+        // Create fallback 1x1 black cubemap for irradiance and prefiltered
+        rhi::TextureDesc cubemapDesc{};
+        cubemapDesc.type = rhi::TextureType::TextureCube;
+        cubemapDesc.width = 1;
+        cubemapDesc.height = 1;
+        cubemapDesc.arrayLayers = 6;
+        cubemapDesc.format = rhi::Format::R8G8B8A8_UNORM;
+        cubemapDesc.usage = rhi::TextureUsage::Sampled;
+
+        if (!m_IrradianceMap) {
+            m_IrradianceMap = m_Device->CreateTexture(cubemapDesc);
+            uint8_t blackPixels[6 * 4] = {0}; // 6 faces, RGBA black
+            m_IrradianceMap->UploadData(blackPixels, sizeof(blackPixels));
+        }
+
+        if (!m_PrefilteredMap) {
+            m_PrefilteredMap = m_Device->CreateTexture(cubemapDesc);
+            uint8_t blackPixels[6 * 4] = {0};
+            m_PrefilteredMap->UploadData(blackPixels, sizeof(blackPixels));
+        }
+
+        // Use white texture for BRDF LUT fallback
+        if (!m_BRDF_LUT) {
+            m_BRDF_LUT = m_DefaultWhiteTexture;
+        }
+
+        // Disable IBL by default if textures failed to load
+        m_EnableIBL = false;
+    } else {
+        METAGFX_INFO << "IBL textures loaded successfully";
+    }
+
     // Create scene and initialize light buffer
     m_Scene = std::make_unique<Scene>();
     m_Scene->InitializeLightBuffer(m_Device.get());
@@ -188,7 +244,7 @@ void Application::Init() {
     // Upload light data to GPU before creating descriptor sets
     m_Scene->UpdateLightBuffer();
 
-    // Create descriptor set with 8 bindings (Phase 2: PBR textures)
+    // Create descriptor set with 11 bindings (Phase 3.2: Added IBL textures)
     std::vector<rhi::DescriptorBinding> bindings = {
         {
             0,  // binding = 0 (MVP matrices)
@@ -253,6 +309,30 @@ void Application::Init() {
             nullptr,  // buffer
             m_DefaultWhiteTexture,
             m_LinearRepeatSampler
+        },
+        {
+            8,  // binding = 8 (Irradiance cubemap for diffuse IBL)
+            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+            VK_SHADER_STAGE_FRAGMENT_BIT,
+            nullptr,  // buffer
+            m_IrradianceMap,
+            m_CubemapSampler
+        },
+        {
+            9,  // binding = 9 (Prefiltered cubemap for specular IBL)
+            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+            VK_SHADER_STAGE_FRAGMENT_BIT,
+            nullptr,  // buffer
+            m_PrefilteredMap,
+            m_CubemapSampler
+        },
+        {
+            10,  // binding = 10 (BRDF LUT for split-sum approximation)
+            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+            VK_SHADER_STAGE_FRAGMENT_BIT,
+            nullptr,  // buffer
+            m_BRDF_LUT,
+            m_LinearRepeatSampler  // 2D texture, use regular sampler
         }
     };
     
@@ -420,27 +500,27 @@ void Application::CreateTriangle() {
         #include "triangle.frag.spv.inl"
     };
     
-    ShaderDesc fragShaderDesc{};
-    fragShaderDesc.stage = ShaderStage::Fragment;
+    rhi::ShaderDesc fragShaderDesc{};
+    fragShaderDesc.stage = rhi::ShaderStage::Fragment;
     fragShaderDesc.code = fragShaderCode;
     fragShaderDesc.entryPoint = "main";
-    
+
     auto fragShader = m_Device->CreateShader(fragShaderDesc);
-    
+
     // Create pipeline
-    PipelineDesc pipelineDesc{};
+    rhi::PipelineDesc pipelineDesc{};
     pipelineDesc.vertexShader = vertShader;
     pipelineDesc.fragmentShader = fragShader;
-    
+
     // Vertex input: position and color
     pipelineDesc.vertexInput.stride = sizeof(float) * 6;
     pipelineDesc.vertexInput.attributes = {
-        { 0, Format::R32G32B32_SFLOAT, 0 },                // position at location 0
-        { 1, Format::R32G32B32_SFLOAT, sizeof(float) * 3 } // color at location 1
+        { 0, rhi::Format::R32G32B32_SFLOAT, 0 },                // position at location 0
+        { 1, rhi::Format::R32G32B32_SFLOAT, sizeof(float) * 3 } // color at location 1
     };
-    
-    pipelineDesc.topology = PrimitiveTopology::TriangleList;
-    pipelineDesc.rasterization.cullMode = CullMode::None;
+
+    pipelineDesc.topology = rhi::PrimitiveTopology::TriangleList;
+    pipelineDesc.rasterization.cullMode = rhi::CullMode::None;
     
     m_Pipeline = m_Device->CreateGraphicsPipeline(pipelineDesc);
     
@@ -466,29 +546,29 @@ void Application::CreateModelPipeline() {
         #include "model.frag.spv.inl"
     };
 
-    ShaderDesc fragShaderDesc{};
-    fragShaderDesc.stage = ShaderStage::Fragment;
+    rhi::ShaderDesc fragShaderDesc{};
+    fragShaderDesc.stage = rhi::ShaderStage::Fragment;
     fragShaderDesc.code = fragShaderCode;
     fragShaderDesc.entryPoint = "main";
 
     auto fragShader = m_Device->CreateShader(fragShaderDesc);
 
     // Create pipeline for models
-    PipelineDesc pipelineDesc{};
+    rhi::PipelineDesc pipelineDesc{};
     pipelineDesc.vertexShader = vertShader;
     pipelineDesc.fragmentShader = fragShader;
 
     // Vertex input: position (vec3), normal (vec3), texcoord (vec2)
     pipelineDesc.vertexInput.stride = sizeof(Vertex);
     pipelineDesc.vertexInput.attributes = {
-        { 0, Format::R32G32B32_SFLOAT, 0 },                          // position at location 0
-        { 1, Format::R32G32B32_SFLOAT, sizeof(float) * 3 },          // normal at location 1
-        { 2, Format::R32G32_SFLOAT, sizeof(float) * 6 }              // texcoord at location 2
+        { 0, rhi::Format::R32G32B32_SFLOAT, 0 },                          // position at location 0
+        { 1, rhi::Format::R32G32B32_SFLOAT, sizeof(float) * 3 },          // normal at location 1
+        { 2, rhi::Format::R32G32_SFLOAT, sizeof(float) * 6 }              // texcoord at location 2
     };
 
-    pipelineDesc.topology = PrimitiveTopology::TriangleList;
-    pipelineDesc.rasterization.cullMode = CullMode::Back;
-    pipelineDesc.rasterization.frontFace = FrontFace::CounterClockwise;  // glTF uses CCW winding order
+    pipelineDesc.topology = rhi::PrimitiveTopology::TriangleList;
+    pipelineDesc.rasterization.cullMode = rhi::CullMode::Back;
+    pipelineDesc.rasterization.frontFace = rhi::FrontFace::CounterClockwise;  // glTF uses CCW winding order
 
     // Enable depth testing for proper 3D rendering
     pipelineDesc.depthStencil.depthTestEnable = true;
@@ -853,6 +933,17 @@ void Application::Render() {
                                     VK_SHADER_STAGE_FRAGMENT_BIT,
                                     20, sizeof(float), &m_Exposure);
 
+                // Push IBL enable flag (offset 24, size 4)
+                uint32_t enableIBL = m_EnableIBL ? 1u : 0u;
+                vkCmd->PushConstants(vkPipeline->GetLayout(),
+                                    VK_SHADER_STAGE_FRAGMENT_BIT,
+                                    24, sizeof(uint32_t), &enableIBL);
+
+                // Push IBL intensity (offset 28, size 4)
+                vkCmd->PushConstants(vkPipeline->GetLayout(),
+                                    VK_SHADER_STAGE_FRAGMENT_BIT,
+                                    28, sizeof(float), &m_IBLIntensity);
+
                 // Bind and draw
                 cmd->BindVertexBuffer(mesh->GetVertexBuffer());
                 cmd->BindIndexBuffer(mesh->GetIndexBuffer());
@@ -1091,7 +1182,11 @@ void Application::RenderImGui(Ref<rhi::CommandBuffer> cmd, Ref<rhi::Texture> bac
 
     // Define UI
     // METAGFX_INFO << "RenderImGui: Creating UI";
+    ImGui::SetNextWindowSize(ImVec2(350, 400), ImGuiCond_FirstUseEver);
     ImGui::Begin("MetaGFX Controls");
+
+    ImGui::Text("Rendering Controls");
+    ImGui::Separator();
 
     // Model selection
     const char* modelNames[] = {
@@ -1109,10 +1204,35 @@ void Application::RenderImGui(Ref<rhi::CommandBuffer> cmd, Ref<rhi::Texture> bac
         }
     }
 
+    ImGui::Spacing();
+
     // Exposure slider
     ImGui::SliderFloat("Exposure", &m_Exposure, 0.1f, 5.0f);
 
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Text("Image-Based Lighting");
+    ImGui::Separator();
+
+    // IBL toggle
+    ImGui::Checkbox("Enable IBL", &m_EnableIBL);
+
+    // IBL intensity slider (only show when IBL is enabled)
+    if (m_EnableIBL) {
+        ImGui::SliderFloat("IBL Intensity", &m_IBLIntensity, 0.0f, 2.0f);
+        ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "Status: Active");
+        ImGui::Text("Environment lighting enabled");
+    } else {
+        ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.0f, 1.0f), "Status: Disabled");
+        ImGui::Text("Using simple ambient (3%%)");
+    }
+
+    ImGui::Spacing();
+    ImGui::Text("Tip: Toggle to see the difference!");
+
     // Demo window toggle
+    ImGui::Spacing();
+    ImGui::Separator();
     ImGui::Checkbox("Show Demo Window", &m_ShowDemoWindow);
 
     ImGui::End();

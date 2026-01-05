@@ -38,12 +38,15 @@ private:
     VkImage m_Image = VK_NULL_HANDLE;
     VkImageView m_ImageView = VK_NULL_HANDLE;
     VkDeviceMemory m_Memory = VK_NULL_HANDLE;
-    
+
     uint32 m_Width = 0;
     uint32 m_Height = 0;
+    uint32 m_MipLevels = 1;
+    uint32 m_ArrayLayers = 1;
+    TextureType m_Type = TextureType::Texture2D;
     Format m_Format = Format::Undefined;
     VkFormat m_VkFormat = VK_FORMAT_UNDEFINED;
-    
+
     bool m_OwnsImage = true;
 };
 

@@ -174,6 +174,12 @@ enum class Format {
     D32_SFLOAT_S8_UINT
 };
 
+enum class TextureType {
+    Texture2D,
+    TextureCube,
+    Texture3D
+};
+
 enum class TextureUsage {
     Sampled         = 1 << 0,
     Storage         = 1 << 1,
@@ -218,6 +224,7 @@ struct BufferDesc {
 };
 
 struct TextureDesc {
+    TextureType type = TextureType::Texture2D;
     uint32 width = 1;
     uint32 height = 1;
     uint32 depth = 1;

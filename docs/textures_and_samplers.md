@@ -1,7 +1,7 @@
 # Textures and Samplers
 
-**Status**: ✅ Implemented (Milestone 2.3)
-**Last Updated**: December 23, 2025
+**Status**: ✅ Implemented (Milestone 2.3, extended with IBL)
+**Last Updated**: January 5, 2026
 
 This document describes the texture and sampler system in MetaGFX, enabling models to be rendered with albedo/diffuse texture maps.
 
@@ -29,13 +29,16 @@ The texture system provides:
 ### Current Scope
 
 - ✅ Albedo textures only
+- ✅ IBL cubemaps with mipmaps (irradiance, prefiltered environment, BRDF LUT)
 - ✅ Synchronous loading
-- ✅ Single mip level (no mipmaps)
+- ✅ Multi-mip cubemaps (for IBL prefiltered environment)
 - ✅ Device-local GPU memory with staging buffers
+- ✅ DDS file format support (including DX10 extended headers)
+- ✅ Float16 textures (R16G16B16A16_SFLOAT, R16G16_SFLOAT)
 - ⏳ Normal maps (deferred to Phase 3)
 - ⏳ Roughness/metallic maps (deferred to Phase 3)
 - ⏳ Async texture streaming (future)
-- ⏳ Mipmap generation (future)
+- ⏳ Procedural mipmap generation (future)
 
 ## Architecture
 
@@ -54,32 +57,43 @@ MetaGFX uses a **shared sampler approach**:
 
 ### Descriptor Binding Layout
 
-The graphics pipeline uses 3 descriptor bindings:
+The graphics pipeline uses multiple descriptor bindings:
 
 | Binding | Type | Stage | Purpose |
 |---------|------|-------|---------|
 | 0 | Uniform Buffer | Vertex | MVP matrices |
 | 1 | Uniform Buffer | Fragment | Material properties (albedo, roughness, metallic) |
 | 2 | Combined Image Sampler | Fragment | Albedo texture + sampler |
+| 3 | Combined Image Sampler | Fragment | Irradiance cubemap (IBL diffuse) |
+| 4 | Combined Image Sampler | Fragment | Prefiltered environment cubemap (IBL specular) |
+| 5 | Combined Image Sampler | Fragment | BRDF integration LUT (2D texture) |
 
 When a material lacks an albedo texture, binding 2 uses a default UV checker texture.
 
+**Note**: Bindings 3-5 are used for Image-Based Lighting (IBL). See [ibl_system.md](ibl_system.md) for details.
+
 ### Push Constants
 
-The fragment shader receives material flags via push constants:
+The fragment shader receives material flags and rendering parameters via push constants:
 
 ```cpp
 struct PushConstants {
     glm::vec4 cameraPosition;  // xyz = camera position, w unused (16 bytes)
     uint32 materialFlags;      // Bit 0: has albedo texture (4 bytes)
-    uint32 padding[3];         // Align to 16 bytes (12 bytes)
+    float exposure;            // HDR exposure value (4 bytes)
+    uint32 enableIBL;          // 0 = disabled, 1 = enabled (4 bytes)
+    float iblIntensity;        // IBL contribution multiplier (4 bytes)
 };  // Total: 32 bytes
 ```
 
 **Material Flags**:
 - Bit 0: `HasAlbedoMap` - Set if material has albedo texture
 
-The shader conditionally samples the texture based on this flag.
+**IBL Parameters**:
+- `enableIBL` - Toggle Image-Based Lighting on/off
+- `iblIntensity` - Scale IBL contribution (default: 0.05 for subtle effect)
+
+The shader conditionally samples textures based on these flags.
 
 ## Core Components
 
@@ -196,6 +210,7 @@ Ref<rhi::Texture> LoadTexture(
 - JPEG (baseline, progressive)
 - TGA (uncompressed, RLE)
 - BMP (uncompressed)
+- DDS (DirectDraw Surface with DX10 extended headers, for HDR cubemaps)
 
 **Error Handling**:
 - Throws `std::runtime_error` on missing files or load failures
@@ -340,6 +355,59 @@ if (aiMat->GetTextureCount(aiTextureType_DIFFUSE) > 0) {
 - Paths are resolved relative to the model file's directory
 - Example: `models/bunny.obj` with texture `textures/bunny_diffuse.png` → `models/textures/bunny_diffuse.png`
 
+### IBL Texture Loading
+
+The renderer loads Image-Based Lighting textures from DDS files at startup. See [ibl_system.md](ibl_system.md) for complete details.
+
+**Loading DDS Cubemaps**:
+
+```cpp
+#include "metagfx/utils/TextureUtils.h"
+
+// Load IBL cubemaps (multi-mip, float16 format)
+Ref<rhi::Texture> irradianceMap = utils::LoadDDSCubemap(
+    device, "assets/envmaps/irradiance.dds"
+);
+
+Ref<rhi::Texture> prefilteredMap = utils::LoadDDSCubemap(
+    device, "assets/envmaps/prefiltered.dds"
+);
+
+// Load BRDF LUT (2D texture, float16 format)
+Ref<rhi::Texture> brdfLUT = utils::LoadDDS2DTexture(
+    device, "assets/envmaps/brdf_lut.dds"
+);
+```
+
+**DDS Texture Specifications**:
+- `irradiance.dds` - 64×64 cubemap, 1 mip level, R16G16B16A16_SFLOAT
+- `prefiltered.dds` - 512×512 cubemap, 6 mip levels, R16G16B16A16_SFLOAT
+- `brdf_lut.dds` - 512×512 2D texture, 1 mip level, R16G16_SFLOAT
+
+**Critical Implementation Details**:
+
+For multi-mip cubemaps to work correctly on MoltenVK, the image layout transition sequence must be:
+
+1. Image created in `VK_IMAGE_LAYOUT_UNDEFINED`
+2. **Do NOT** transition layout in the VulkanTexture constructor
+3. In `UploadData()`, transition: `UNDEFINED → TRANSFER_DST_OPTIMAL`
+4. Upload all mip levels and faces
+5. Transition: `TRANSFER_DST_OPTIMAL → SHADER_READ_ONLY_OPTIMAL`
+
+Premature layout transitions cause MoltenVK to mishandle multi-mip cubemap uploads, resulting in black textures. See [ibl_system.md](ibl_system.md) for the detailed explanation.
+
+**DDS Data Layout**:
+
+The prefiltered cubemap DDS file stores data sequentially by mip level, then by face:
+```
+Mip 0: [+X, -X, +Y, -Y, +Z, -Z]
+Mip 1: [+X, -X, +Y, -Y, +Z, -Z]
+...
+Mip 5: [+X, -X, +Y, -Y, +Z, -Z]
+```
+
+The upload code matches this layout by looping mips first, then faces within each mip.
+
 ## Material Integration
 
 ### Using Textures in Materials
@@ -444,6 +512,11 @@ layout(binding = 1) uniform MaterialUBO {
 
 // Binding 2: Albedo texture sampler
 layout(binding = 2) uniform sampler2D albedoSampler;
+
+// Binding 3-5: IBL textures (Image-Based Lighting)
+layout(binding = 3) uniform samplerCube irradianceMap;
+layout(binding = 4) uniform samplerCube prefilteredMap;
+layout(binding = 5) uniform sampler2D brdfLUT;
 ```
 
 **Push Constants**:
@@ -452,7 +525,9 @@ layout(binding = 2) uniform sampler2D albedoSampler;
 layout(push_constant) uniform PushConstants {
     vec4 cameraPosition;  // xyz = position, w unused
     uint materialFlags;   // Bit 0: has albedo texture
-    uint padding[3];      // Align to 16 bytes
+    float exposure;       // HDR exposure value
+    uint enableIBL;       // 0 = disabled, 1 = enabled
+    float iblIntensity;   // IBL contribution multiplier
 } pushConstants;
 ```
 
@@ -674,7 +749,7 @@ layout(push_constant) uniform PushConstants {
 
 ### Additional Features
 
-- **Cube Maps**: Environment maps for skyboxes and reflections
+- ✅ **Cube Maps**: Environment maps for skyboxes and reflections (implemented for IBL)
 - **Texture Atlases**: Pack multiple textures into single atlas
 - **Texture Arrays**: Array textures for terrain splatting, decals
 - **Render Targets**: Render-to-texture for post-processing, shadows
@@ -693,3 +768,4 @@ layout(push_constant) uniform PushConstants {
 - [RHI Architecture](rhi.md)
 - [Material System](../claude/milestone_2_2/implementation_notes.md)
 - [Model Loading](model_loading.md)
+- [IBL System](ibl_system.md) - Image-Based Lighting with cubemaps and mipmaps

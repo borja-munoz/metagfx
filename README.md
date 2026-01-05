@@ -273,3 +273,4 @@ Models and scenes repositories:
 - [ambientCG](https://ambientcg.com). 3D assets including PBR surfaces, HDRIs, models...
 - [Open Research Content Archive](https://developer.nvidia.com/orca). 3D assets donated by Amazon Lumberyard, SpeedTree, NVIDIA and Epic in FBX format.
 - [glTF 2.0 Sample Models](https://github.com/KhronosGroup/glTF-Sample-Models/blob/main/2.0/README.md). Models with PBR features.
+- [Poly Haven](https://polyhaven.com). HDRIs, Textures and Models.

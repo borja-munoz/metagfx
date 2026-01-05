@@ -136,22 +136,28 @@ kD *= 1.0 - metallic;  // Metals have no diffuse
 | 0 | UBO | MVP matrices (model, view, projection) |
 | 1 | UBO | Material properties (albedo, roughness, metallic) |
 | 2 | Sampler2D | Albedo/base color texture |
-| 3 | UBO | Light buffer (up to 16 lights) |
-| 4 | Sampler2D | Normal map |
-| 5 | Sampler2D | Metallic map (or combined metallic-roughness) |
-| 6 | Sampler2D | Roughness map (or combined metallic-roughness) |
-| 7 | Sampler2D | Ambient occlusion map |
+| 3 | SamplerCube | IBL irradiance cubemap (diffuse) |
+| 4 | SamplerCube | IBL prefiltered environment cubemap (specular) |
+| 5 | Sampler2D | IBL BRDF integration LUT |
+| 6 | UBO | Light buffer (up to 16 lights) |
+| 7 | Sampler2D | Normal map |
+| 8 | Sampler2D | Metallic map (or combined metallic-roughness) |
+| 9 | Sampler2D | Roughness map (or combined metallic-roughness) |
+| 10 | Sampler2D | Ambient occlusion map |
+
+**Note**: Bindings 3-5 are used for Image-Based Lighting. See [ibl_system.md](ibl_system.md) for details.
 
 ### Push Constants
 
-**Structure**: `src/app/model.frag:38-43`
+**Structure**: `src/app/model.frag:44-50`
 
 ```glsl
 layout(push_constant) uniform PushConstants {
     vec4 cameraPosition;   // Camera world position (xyz) + padding
     uint materialFlags;    // Texture presence flags
     float exposure;        // Exposure adjustment
-    uint padding[2];       // Alignment
+    uint enableIBL;        // 0 = disabled, 1 = enabled
+    float iblIntensity;    // IBL contribution multiplier
 } pushConstants;
 ```
 
@@ -162,6 +168,10 @@ layout(push_constant) uniform PushConstants {
 - Bit 3: HasRoughnessMap
 - Bit 4: HasMetallicRoughnessMap (glTF combined texture)
 - Bit 5: HasAOMap
+
+**IBL Parameters**:
+- `enableIBL` - Toggle Image-Based Lighting on/off
+- `iblIntensity` - Scale IBL contribution (default: 0.05 for subtle effect)
 
 ---
 
@@ -246,28 +256,28 @@ vec3 getNormalFromMap(vec2 texCoord, vec3 worldPos, vec3 worldNormal) {
 
 ## Tone Mapping and Post-Processing
 
-### ACES Filmic Tone Mapping
+### Tone Mapping
 
-**Implementation**: `src/app/model.frag:103-110`
+**Implementation**: `src/app/model.frag:380-384`
 
-The renderer uses the ACES (Academy Color Encoding System) filmic tone mapping curve, the industry standard for film and game production:
+The renderer uses simple clamping for tone mapping:
 
 ```glsl
-vec3 toneMapACES(vec3 color) {
-    const float a = 2.51;
-    const float b = 0.03;
-    const float c = 2.43;
-    const float d = 0.59;
-    const float e = 0.14;
-    return clamp((color * (a * color + b)) / (color * (c * color + d) + e), 0.0, 1.0);
-}
+// Apply tone mapping (HDR to LDR)
+// NOTE: Using simple clamp instead of ACES - ACES was causing black artifacts with IBL
+color = clamp(color, 0.0, 1.0);
 ```
 
-**Benefits**:
-- Smooth shoulder in highlights (prevents over-saturation)
-- Preserves color hue better than Reinhard
-- Widely adopted in production pipelines
-- Handles HDR to LDR conversion gracefully
+**Why Simple Clamping Instead of ACES?**
+
+During IBL implementation, the ACES filmic tone mapping curve was found to cause black artifacts with Image-Based Lighting values. The ACES curve's non-linear transformation was incorrectly handling IBL contributions, causing reflections to be inverted or clamped to black in certain orientations.
+
+Simple clamping provides:
+- Correct rendering of IBL reflections
+- Stable output across all viewing angles
+- Predictable behavior with varying IBL intensities
+
+**Note**: A more sophisticated tone mapping solution compatible with IBL (such as a modified ACES or other HDR tone mapper) may be explored in future updates.
 
 ### Exposure Control
 
@@ -296,16 +306,24 @@ float exposure = 1.0f;  // Default, increase to brighten (e.g., 1.5, 2.0)
 The complete post-processing pipeline in order:
 
 1. **PBR Lighting Calculation**: Cook-Torrance BRDF for all lights
-2. **Ambient Term**: Simple ambient approximation with AO
-3. **Exposure**: Multiply by exposure value
-4. **Tone Mapping**: ACES filmic curve (HDR → LDR)
-5. **Gamma Correction**: Power 2.2 (linear → sRGB)
+2. **IBL Contribution**: Image-Based Lighting (diffuse irradiance + specular reflection)
+3. **Ambient Term**: Combine direct lighting and IBL
+4. **Exposure**: Multiply by exposure value
+5. **Tone Mapping**: Simple clamping (HDR → LDR)
+6. **Gamma Correction**: Power 2.2 (linear → sRGB)
 
 ```glsl
-vec3 color = ambient + Lo;               // Step 1-2
-color = color * pushConstants.exposure;  // Step 3
-color = toneMapACES(color);              // Step 4
-color = pow(color, vec3(1.0/2.2));       // Step 5
+// Direct lighting
+vec3 Lo = /* Cook-Torrance BRDF */;
+
+// Image-Based Lighting (if enabled)
+vec3 ambient = (diffuseIBL + specularIBL) * pushConstants.iblIntensity;
+
+// Combine lighting
+vec3 color = ambient + Lo;               // Steps 1-3
+color = color * pushConstants.exposure;  // Step 4
+color = clamp(color, 0.0, 1.0);         // Step 5
+color = pow(color, vec3(1.0/2.2));      // Step 6
 ```
 
 ### Roughness Clamping
@@ -429,20 +447,16 @@ material.SetNormalMap(normalTexture);
 
 ## Future Enhancements
 
-### Planned Features (Phase 3 - IBL)
+### Completed Features
 
-**Image-Based Lighting**:
-- Environment maps (cubemaps)
-- Pre-filtered importance sampling
-- BRDF lookup table (LUT)
-- Diffuse irradiance convolution
-- Specular reflection with varying roughness
+**✅ Image-Based Lighting (Phase 3)**:
+- Environment maps (cubemaps) ✅
+- Pre-filtered importance sampling ✅
+- BRDF lookup table (LUT) ✅
+- Diffuse irradiance convolution ✅
+- Specular reflection with varying roughness ✅
 
-**Benefits**:
-- Realistic ambient lighting
-- Accurate reflections from environment
-- Better integration with surroundings
-- Professional-quality results
+See [ibl_system.md](ibl_system.md) for complete IBL documentation.
 
 ### Potential Optimizations
 
@@ -500,7 +514,7 @@ material.SetNormalMap(normalTexture);
 
 ### Known Limitations
 
-1. **No IBL**: Ambient lighting is a simple constant term
+1. **Tone Mapping**: Using simple clamping instead of ACES due to IBL compatibility issues
 2. **No Shadows**: Direct lighting doesn't account for occlusion
 3. **Limited Light Count**: Maximum 16 lights in uniform buffer
 4. **No Transparency**: Alpha blending not yet implemented
@@ -514,16 +528,24 @@ The MetaGFX PBR system provides a solid foundation for physically-accurate rende
 
 ✅ Industry-standard Cook-Torrance BRDF
 ✅ Full glTF 2.0 material support
-✅ High-quality ACES tone mapping
+✅ Image-Based Lighting with split-sum approximation
 ✅ Flexible texture system
 ✅ Comprehensive debug modes
 ✅ Clean, maintainable shader code
 
-The implementation follows best practices and provides a clear path for future enhancements including IBL, advanced materials, and performance optimizations.
+The implementation follows best practices and provides a clear path for future enhancements including advanced materials, shadows, and performance optimizations.
 
 ---
 
-**Last Updated**: December 25, 2025
-**Milestone**: 3.2 - PBR Rendering
-**Status**: Complete (Phase 1, 2, 4)
-**Pending**: Phase 3 (IBL) - deferred to future milestone
+**Last Updated**: January 5, 2026
+**Milestone**: 3.2 - PBR Rendering (with IBL)
+**Status**: Complete (Phase 1, 2, 3, 4)
+
+---
+
+## Related Documentation
+
+- [IBL System](ibl_system.md) - Complete Image-Based Lighting implementation
+- [Textures and Samplers](textures_and_samplers.md) - Texture loading and sampling system
+- [Material System](material_system.md) - Material properties and management
+- [Light System](light_system.md) - Dynamic lighting implementation
