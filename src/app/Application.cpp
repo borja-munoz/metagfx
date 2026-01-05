@@ -1165,19 +1165,41 @@ void Application::Shutdown() {
         m_Model.reset();
     }
 
+    // Clean up pipelines
     m_ModelPipeline.reset();
+    m_SkyboxPipeline.reset();
     m_Pipeline.reset();
+
+    // Clean up buffers
     m_VertexBuffer.reset();
+    m_SkyboxVertexBuffer.reset();
+    m_SkyboxIndexBuffer.reset();
     m_UniformBuffers[0].reset();
     m_UniformBuffers[1].reset();
     m_MaterialBuffers[0].reset();
     m_MaterialBuffers[1].reset();
+
+    // Clean up descriptor sets
     m_DescriptorSet.reset();
-    m_DefaultTexture.reset();         // Clean up before device
-    m_DefaultNormalMap.reset();       // Clean up before device
-    m_DefaultWhiteTexture.reset();    // Clean up before device
-    m_DepthBuffer.reset();            // Clean up before device
-    m_LinearRepeatSampler.reset();    // Clean up before device
+    m_SkyboxDescriptorSet.reset();
+
+    // Clean up textures (must be before device destruction)
+    m_DefaultTexture.reset();
+    m_DefaultNormalMap.reset();
+    m_DefaultWhiteTexture.reset();
+    m_DepthBuffer.reset();
+
+    // Clean up IBL textures
+    m_IrradianceMap.reset();
+    m_PrefilteredMap.reset();
+    m_BRDF_LUT.reset();
+    m_EnvironmentMap.reset();
+
+    // Clean up samplers
+    m_LinearRepeatSampler.reset();
+    m_CubemapSampler.reset();
+
+    // Finally destroy the device
     m_Device.reset();
     
     if (m_Window) {
