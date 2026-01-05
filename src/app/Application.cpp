@@ -197,6 +197,8 @@ void Application::Init() {
         "/Users/Borja/dev/borja-munoz/metagfx/assets/envmaps/prefiltered.dds");
     m_BRDF_LUT = utils::LoadDDS2DTexture(m_Device.get(),
         "/Users/Borja/dev/borja-munoz/metagfx/assets/envmaps/brdf_lut.dds");
+    m_EnvironmentMap = utils::LoadDDSCubemap(m_Device.get(),
+        "/Users/Borja/dev/borja-munoz/metagfx/assets/envmaps/environment.dds");
 
     if (!m_IrradianceMap || !m_PrefilteredMap || !m_BRDF_LUT) {
         METAGFX_WARN << "Failed to load IBL textures! Using fallback textures.";
@@ -341,6 +343,31 @@ void Application::Init() {
         bindings
     );
 
+    // Create skybox descriptor set with 2 bindings
+    std::vector<rhi::DescriptorBinding> skyboxBindings = {
+        {
+            0,  // binding = 0 (MVP matrices - shared with main renderer)
+            VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+            VK_SHADER_STAGE_VERTEX_BIT,
+            m_UniformBuffers[0],
+            nullptr,  // texture
+            nullptr   // sampler
+        },
+        {
+            1,  // binding = 1 (Environment cubemap)
+            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+            VK_SHADER_STAGE_FRAGMENT_BIT,
+            nullptr,  // buffer
+            m_EnvironmentMap,
+            m_CubemapSampler
+        }
+    };
+
+    m_SkyboxDescriptorSet = std::make_unique<rhi::VulkanDescriptorSet>(
+        std::static_pointer_cast<rhi::VulkanDevice>(m_Device)->GetContext(),
+        skyboxBindings
+    );
+
     // Set descriptor set layout on device before creating pipeline
     std::static_pointer_cast<rhi::VulkanDevice>(m_Device)->SetDescriptorSetLayout(
         m_DescriptorSet->GetLayout()
@@ -351,6 +378,20 @@ void Application::Init() {
 
     // Create model pipeline
     CreateModelPipeline();
+
+    // Create skybox pipeline with skybox descriptor set layout
+    std::static_pointer_cast<rhi::VulkanDevice>(m_Device)->SetDescriptorSetLayout(
+        m_SkyboxDescriptorSet->GetLayout()
+    );
+    CreateSkyboxPipeline();
+
+    // Restore main descriptor set layout
+    std::static_pointer_cast<rhi::VulkanDevice>(m_Device)->SetDescriptorSetLayout(
+        m_DescriptorSet->GetLayout()
+    );
+
+    // Create skybox cube geometry
+    CreateSkyboxCube();
 
     // Initialize available models list
     m_AvailableModels = {
@@ -577,6 +618,112 @@ void Application::CreateModelPipeline() {
     m_ModelPipeline = m_Device->CreateGraphicsPipeline(pipelineDesc);
 
     METAGFX_INFO << "Model pipeline created";
+}
+
+void Application::CreateSkyboxPipeline() {
+    using namespace rhi;
+
+    // Load skybox shaders (SPIR-V bytecode)
+    std::vector<uint8> vertShaderCode = {
+        #include "skybox.vert.spv.inl"
+    };
+
+    ShaderDesc vertShaderDesc{};
+    vertShaderDesc.stage = ShaderStage::Vertex;
+    vertShaderDesc.code = vertShaderCode;
+    vertShaderDesc.entryPoint = "main";
+
+    auto vertShader = m_Device->CreateShader(vertShaderDesc);
+
+    std::vector<uint8> fragShaderCode = {
+        #include "skybox.frag.spv.inl"
+    };
+
+    ShaderDesc fragShaderDesc{};
+    fragShaderDesc.stage = ShaderStage::Fragment;
+    fragShaderDesc.code = fragShaderCode;
+    fragShaderDesc.entryPoint = "main";
+
+    auto fragShader = m_Device->CreateShader(fragShaderDesc);
+
+    // Create pipeline for skybox
+    PipelineDesc pipelineDesc{};
+    pipelineDesc.vertexShader = vertShader;
+    pipelineDesc.fragmentShader = fragShader;
+
+    // Vertex input: position (vec3) only - used as cubemap direction
+    pipelineDesc.vertexInput.stride = sizeof(Vertex);
+    pipelineDesc.vertexInput.attributes = {
+        { 0, Format::R32G32B32_SFLOAT, 0 }  // position at location 0
+    };
+
+    pipelineDesc.topology = PrimitiveTopology::TriangleList;
+    pipelineDesc.rasterization.cullMode = CullMode::None;  // No culling for debugging
+    pipelineDesc.rasterization.frontFace = FrontFace::CounterClockwise;
+
+    // Depth testing: LessOrEqual without writing depth (render where depth == 1.0 cleared value)
+    pipelineDesc.depthStencil.depthTestEnable = true;
+    pipelineDesc.depthStencil.depthWriteEnable = false;  // Don't write depth
+    pipelineDesc.depthStencil.depthCompareOp = CompareOp::LessOrEqual;
+
+    m_SkyboxPipeline = m_Device->CreateGraphicsPipeline(pipelineDesc);
+
+    METAGFX_INFO << "Skybox pipeline created";
+}
+
+void Application::CreateSkyboxCube() {
+    using namespace rhi;
+
+    // Skybox cube vertices (positions only)
+    // We use a unit cube centered at origin
+    Vertex vertices[] = {
+        // Back face
+        {{-1.0f, -1.0f, -1.0f}, {}, {}},
+        {{ 1.0f, -1.0f, -1.0f}, {}, {}},
+        {{ 1.0f,  1.0f, -1.0f}, {}, {}},
+        {{-1.0f,  1.0f, -1.0f}, {}, {}},
+        // Front face
+        {{-1.0f, -1.0f,  1.0f}, {}, {}},
+        {{ 1.0f, -1.0f,  1.0f}, {}, {}},
+        {{ 1.0f,  1.0f,  1.0f}, {}, {}},
+        {{-1.0f,  1.0f,  1.0f}, {}, {}},
+    };
+
+    // Cube indices (36 indices for 12 triangles, 6 faces)
+    uint32_t indices[] = {
+        // Back face
+        0, 1, 2, 2, 3, 0,
+        // Front face
+        4, 6, 5, 6, 4, 7,
+        // Left face
+        4, 0, 3, 3, 7, 4,
+        // Right face
+        1, 5, 6, 6, 2, 1,
+        // Bottom face
+        4, 5, 1, 1, 0, 4,
+        // Top face
+        3, 2, 6, 6, 7, 3
+    };
+
+    // Create vertex buffer
+    BufferDesc vertexBufferDesc{};
+    vertexBufferDesc.size = sizeof(vertices);
+    vertexBufferDesc.usage = BufferUsage::Vertex;
+    vertexBufferDesc.memoryUsage = MemoryUsage::CPUToGPU;
+
+    m_SkyboxVertexBuffer = m_Device->CreateBuffer(vertexBufferDesc);
+    m_SkyboxVertexBuffer->CopyData(vertices, sizeof(vertices));
+
+    // Create index buffer
+    BufferDesc indexBufferDesc{};
+    indexBufferDesc.size = sizeof(indices);
+    indexBufferDesc.usage = BufferUsage::Index;
+    indexBufferDesc.memoryUsage = MemoryUsage::CPUToGPU;
+
+    m_SkyboxIndexBuffer = m_Device->CreateBuffer(indexBufferDesc);
+    m_SkyboxIndexBuffer->CopyData(indices, sizeof(indices));
+
+    METAGFX_INFO << "Skybox cube created (8 vertices, 36 indices)";
 }
 
 void Application::Run() {
@@ -828,8 +975,8 @@ void Application::Render() {
     scissor.width = swapChain->GetWidth();
     scissor.height = swapChain->GetHeight();
     cmd->SetScissor(scissor);
-    
-    // Draw the model
+
+    // Draw the model FIRST
     if (m_Model && m_Model->IsValid()) {
         // Bind model pipeline
         cmd->BindPipeline(m_ModelPipeline);
@@ -950,6 +1097,40 @@ void Application::Render() {
                 cmd->DrawIndexed(mesh->GetIndexCount());
             }
         }
+    }
+
+    // Render skybox LAST (only where depth >= model depth)
+    if (m_ShowSkybox && m_EnvironmentMap && m_SkyboxPipeline && m_SkyboxVertexBuffer && m_SkyboxIndexBuffer && m_SkyboxDescriptorSet) {
+        cmd->BindPipeline(m_SkyboxPipeline);
+
+        // Get Vulkan-specific objects
+        auto vkSkyboxPipeline = std::static_pointer_cast<VulkanPipeline>(m_SkyboxPipeline);
+
+        // Update skybox descriptor set with uniform buffer (always use buffer[0])
+        // FIXME: Matches main renderer which always updates buffer[0]
+        m_SkyboxDescriptorSet->UpdateBuffer(0, m_UniformBuffers[0]);
+
+        // Bind skybox descriptor set (binding 0: MVP, binding 1: environment cubemap)
+        vkCmd->BindDescriptorSet(vkSkyboxPipeline->GetLayout(),
+                                 m_SkyboxDescriptorSet->GetSet(m_CurrentFrame));
+
+        // Push constants: exposure and LOD
+        struct SkyboxPushConstants {
+            float exposure;
+            float lod;
+        } skyboxPushConstants;
+
+        skyboxPushConstants.exposure = m_Exposure;
+        skyboxPushConstants.lod = m_SkyboxLOD;
+
+        vkCmd->PushConstants(vkSkyboxPipeline->GetLayout(),
+                            VK_SHADER_STAGE_FRAGMENT_BIT,
+                            0, sizeof(SkyboxPushConstants), &skyboxPushConstants);
+
+        // Draw the skybox cube
+        cmd->BindVertexBuffer(m_SkyboxVertexBuffer);
+        cmd->BindIndexBuffer(m_SkyboxIndexBuffer);
+        cmd->DrawIndexed(36);  // 36 indices for the cube
     }
 
     cmd->EndRendering();
@@ -1229,6 +1410,24 @@ void Application::RenderImGui(Ref<rhi::CommandBuffer> cmd, Ref<rhi::Texture> bac
 
     ImGui::Spacing();
     ImGui::Text("Tip: Toggle to see the difference!");
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Text("Skybox");
+    ImGui::Separator();
+
+    // Skybox toggle
+    ImGui::Checkbox("Show Skybox", &m_ShowSkybox);
+
+    // Skybox LOD slider (only show when skybox is enabled)
+    if (m_ShowSkybox) {
+        ImGui::SliderFloat("Skybox Blur", &m_SkyboxLOD, 0.0f, 5.0f);
+        ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "Status: Visible");
+        ImGui::Text("Environment map displayed");
+    } else {
+        ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.0f, 1.0f), "Status: Hidden");
+        ImGui::Text("Using solid color background");
+    }
 
     // Demo window toggle
     ImGui::Spacing();

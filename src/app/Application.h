@@ -47,6 +47,8 @@ private:
     void Init();
     void CreateTriangle();
     void CreateModelPipeline();
+    void CreateSkyboxPipeline();
+    void CreateSkyboxCube();
     void CreateTestLights();
     void LoadModel(const std::string& path);
     void LoadNextModel();
@@ -69,6 +71,9 @@ private:
     Ref<rhi::Buffer> m_VertexBuffer;
     Ref<rhi::Pipeline> m_Pipeline;
     Ref<rhi::Pipeline> m_ModelPipeline;
+    Ref<rhi::Pipeline> m_SkyboxPipeline;  // Pipeline for skybox rendering
+    Ref<rhi::Buffer> m_SkyboxVertexBuffer;  // Cube vertices for skybox
+    Ref<rhi::Buffer> m_SkyboxIndexBuffer;   // Cube indices for skybox
 
     // Camera
     std::unique_ptr<Camera> m_Camera;
@@ -88,6 +93,7 @@ private:
     Ref<rhi::Buffer> m_UniformBuffers[2];  // Double buffering for MVP
     Ref<rhi::Buffer> m_MaterialBuffers[2];  // Double buffering for material
     std::unique_ptr<rhi::VulkanDescriptorSet> m_DescriptorSet;
+    std::unique_ptr<rhi::VulkanDescriptorSet> m_SkyboxDescriptorSet;  // Separate descriptor set for skybox
     uint32 m_CurrentFrame = 0;
 
     // Texture resources
@@ -102,6 +108,7 @@ private:
     Ref<rhi::Texture> m_IrradianceMap;   // Diffuse irradiance cubemap
     Ref<rhi::Texture> m_PrefilteredMap;  // Specular prefiltered cubemap
     Ref<rhi::Texture> m_BRDF_LUT;        // BRDF integration lookup table
+    Ref<rhi::Texture> m_EnvironmentMap;  // Full-resolution environment map for skybox
 
     // Scene and model
     std::unique_ptr<Scene> m_Scene;
@@ -129,6 +136,8 @@ private:
     float m_Exposure = 1.0f;
     bool m_EnableIBL = true;  // Enable/disable Image-Based Lighting
     float m_IBLIntensity = 0.05f;  // IBL contribution multiplier (default: very subtle)
+    bool m_ShowSkybox = true;  // Show/hide skybox
+    float m_SkyboxLOD = 0.0f;  // Skybox mipmap LOD (0 = sharp, higher = blurred)
     bool m_ShowDemoWindow = false;
 };
 
