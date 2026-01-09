@@ -10,21 +10,6 @@ MetaGFX is a backend-agnostic physically-based renderer implementing a common ab
 
 ## Build Commands
 
-### Quick Setup (First Time)
-
-**Linux/macOS:**
-```bash
-chmod +x setup.sh
-./setup.sh
-```
-
-**Windows:**
-```bash
-setup.bat
-```
-
-### Building
-
 **Linux/macOS:**
 ```bash
 mkdir build
@@ -74,11 +59,9 @@ Shaders are located in `src/app/` and must be compiled to SPIR-V bytecode includ
 
 ```bash
 # Compile vertex shader
-glslangValidator -V src/app/triangle.vert -o src/app/triangle.vert.spv
 glslangValidator -V src/app/model.vert -o src/app/model.vert.spv
 
 # Compile fragment shader
-glslangValidator -V src/app/triangle.frag -o src/app/triangle.frag.spv
 glslangValidator -V src/app/model.frag -o src/app/model.frag.spv
 
 # Convert SPIR-V to C++ include file
@@ -91,6 +74,7 @@ The compiled shaders (`.spv.inl` files) are included directly in the C++ source.
 **Available Shaders**:
 - `triangle.vert/frag` - Simple vertex color rendering
 - `model.vert/frag` - Full vertex layout with normals and UVs, with PBR lighting
+- `skybox.vert/frag` - Skybox rendering
 
 ## Architecture
 
@@ -104,13 +88,13 @@ The codebase follows a strict layered architecture:
 ├─────────────────────────────────────────┤
 │   Renderer (src/renderer)               │  ← High-level rendering logic
 ├─────────────────────────────────────────┤
-│   Scene (src/scene)                     │  ← Camera, Mesh, Model (future)
+│   Scene (src/scene)                     │  ← Camera, Light, Mesh, Model 
 ├─────────────────────────────────────────┤
 │   RHI - Render Hardware Interface       │  ← API-agnostic abstractions
 │        (src/rhi)                        │
-├──────┬──────────────────────────────────┤
-│Vulkan│  D3D12  │  Metal  │  WebGPU      │  ← Backend implementations
-└──────┴──────────────────────────────────┘
+├────────┬────────────────────────────────┤
+│ Vulkan │  D3D12  │  Metal  │  WebGPU    │  ← Backend implementations
+└────────┴────────────────────────────────┘
 ```
 
 ### RHI (Render Hardware Interface)
@@ -149,6 +133,7 @@ The RHI is the core abstraction that enables multi-backend support. Key principl
 **External Dependencies**:
 - **Assimp**: 3D model loading (OBJ, FBX, glTF, COLLADA importers enabled)
 - **GLM**: Mathematics library for vectors, matrices
+- **imgui**: User interface components
 - **SDL3**: Window management and input
 - **stb**: Image loading (stb_image for PNG, JPEG, TGA, BMP)
 
@@ -194,16 +179,19 @@ The codebase uses type aliases for smart pointers:
 ### Adding New Features
 
 1. Check the roadmap (`claude/metagfx_roadmap.md`) to understand the planned architecture
+2. Create an implementation plan for the next feature in the roadmap in the `claude`folder
+3. Confirm the implementation approach before proceeding with implementation
 2. If adding RHI functionality, define the abstract interface first in `include/metagfx/rhi/`
 3. Implement the Vulkan backend in `src/rhi/vulkan/`
 4. Update the corresponding CMakeLists.txt to include new source files
-5. When complete, document in `docs` if it's a milestone feature
+5. When complete, document in `docs`, either updating existing docs or adding new ones if needed
 
 ### Working with Shaders
 
 - GLSL shaders (`.vert`, `.frag`) live in `src/app/`
 - Version: `#version 450` (GLSL 4.5 for Vulkan)
 - Compile shaders to `.spv` using `glslangValidator`
+- Generate `.inl` headers using `python convert_spv.py` script
 - Include compiled bytecode as `.spv.inl` C++ headers
 - Shaders use uniform buffer objects (UBOs) for MVP matrices and material data
 
