@@ -168,6 +168,13 @@ void Application::Init() {
         m_Device.get(), whiteImage, rhi::Format::R8G8B8A8_UNORM
     );
 
+    // Create default black texture (1x1 black pixel) - for missing emissive map
+    uint8_t blackPixel[4] = {0, 0, 0, 255};  // RGBA black (no emission)
+    utils::ImageData blackImage{blackPixel, 1, 1, 4};
+    m_DefaultBlackTexture = utils::CreateTextureFromImage(
+        m_Device.get(), blackImage, rhi::Format::R8G8B8A8_UNORM
+    );
+
     // Create depth buffer for 3D rendering
     auto swapChain = m_Device->GetSwapChain();
     rhi::TextureDesc depthDesc{};
@@ -246,7 +253,7 @@ void Application::Init() {
     // Upload light data to GPU before creating descriptor sets
     m_Scene->UpdateLightBuffer();
 
-    // Create descriptor set with 11 bindings (Phase 3.2: Added IBL textures)
+    // Create descriptor set with 12 bindings (Phase 3.2: Added IBL textures + emissive)
     std::vector<rhi::DescriptorBinding> bindings = {
         {
             0,  // binding = 0 (MVP matrices)
@@ -335,9 +342,17 @@ void Application::Init() {
             nullptr,  // buffer
             m_BRDF_LUT,
             m_LinearRepeatSampler  // 2D texture, use regular sampler
+        },
+        {
+            11,  // binding = 11 (Emissive texture)
+            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+            VK_SHADER_STAGE_FRAGMENT_BIT,
+            nullptr,  // buffer
+            m_DefaultBlackTexture,  // Default: no emission
+            m_LinearRepeatSampler
         }
     };
-    
+
     m_DescriptorSet = std::make_unique<rhi::VulkanDescriptorSet>(
         std::static_pointer_cast<rhi::VulkanDevice>(m_Device)->GetContext(),
         bindings
@@ -1050,6 +1065,14 @@ void Application::Render() {
                     m_DescriptorSet->UpdateTexture(7, m_DefaultWhiteTexture, m_LinearRepeatSampler);
                 }
 
+                // Binding 11: Emissive map
+                Ref<rhi::Texture> emissiveMap = material->GetEmissiveMap();
+                if (emissiveMap) {
+                    m_DescriptorSet->UpdateTexture(11, emissiveMap, m_LinearRepeatSampler);
+                } else {
+                    m_DescriptorSet->UpdateTexture(11, m_DefaultBlackTexture, m_LinearRepeatSampler);
+                }
+
                 // Re-bind descriptor set after texture updates
                 vkCmd->BindDescriptorSet(vkPipeline->GetLayout(),
                                         m_DescriptorSet->GetSet(0));
@@ -1066,7 +1089,8 @@ void Application::Render() {
                                  << ", HasMetallic=" << ((flags & 0x4) != 0)
                                  << ", HasRoughness=" << ((flags & 0x8) != 0)
                                  << ", HasMetallicRoughness=" << ((flags & 0x10) != 0)
-                                 << ", HasAO=" << ((flags & 0x20) != 0) << ")";
+                                 << ", HasAO=" << ((flags & 0x20) != 0)
+                                 << ", HasEmissive=" << ((flags & 0x40) != 0) << ")";
                     loggedOnce = true;
                 }
 
@@ -1187,6 +1211,7 @@ void Application::Shutdown() {
     m_DefaultTexture.reset();
     m_DefaultNormalMap.reset();
     m_DefaultWhiteTexture.reset();
+    m_DefaultBlackTexture.reset();
     m_DepthBuffer.reset();
 
     // Clean up IBL textures

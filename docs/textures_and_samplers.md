@@ -1,7 +1,7 @@
 # Textures and Samplers
 
-**Status**: ✅ Implemented (Milestone 2.3, extended with IBL)
-**Last Updated**: January 5, 2026
+**Status**: ✅ Implemented (Milestone 2.3, extended with IBL and Emissive)
+**Last Updated**: January 9, 2026
 
 This document describes the texture and sampler system in MetaGFX, enabling models to be rendered with albedo/diffuse texture maps.
 
@@ -21,6 +21,7 @@ This document describes the texture and sampler system in MetaGFX, enabling mode
 
 The texture system provides:
 - **Albedo/diffuse texture support** for materials
+- **Emissive texture support** for self-illuminating materials (January 2026)
 - **Shared sampler strategy** for efficiency (one sampler instance used by all materials)
 - **Synchronous texture loading** using stb_image (PNG, JPEG, TGA, BMP)
 - **Fallback to scalar albedo** for materials without textures (backward compatible)
@@ -28,15 +29,17 @@ The texture system provides:
 
 ### Current Scope
 
-- ✅ Albedo textures only
+- ✅ Albedo textures
+- ✅ Emissive textures (self-illuminating materials)
+- ✅ Normal maps (PBR)
+- ✅ Metallic/roughness maps (PBR)
+- ✅ Ambient occlusion maps
 - ✅ IBL cubemaps with mipmaps (irradiance, prefiltered environment, BRDF LUT)
 - ✅ Synchronous loading
 - ✅ Multi-mip cubemaps (for IBL prefiltered environment)
 - ✅ Device-local GPU memory with staging buffers
 - ✅ DDS file format support (including DX10 extended headers)
 - ✅ Float16 textures (R16G16B16A16_SFLOAT, R16G16_SFLOAT)
-- ⏳ Normal maps (deferred to Phase 3)
-- ⏳ Roughness/metallic maps (deferred to Phase 3)
 - ⏳ Async texture streaming (future)
 - ⏳ Procedural mipmap generation (future)
 
@@ -62,13 +65,19 @@ The graphics pipeline uses multiple descriptor bindings:
 | Binding | Type | Stage | Purpose |
 |---------|------|-------|---------|
 | 0 | Uniform Buffer | Vertex | MVP matrices |
-| 1 | Uniform Buffer | Fragment | Material properties (albedo, roughness, metallic) |
+| 1 | Uniform Buffer | Fragment | Material properties (albedo, roughness, metallic, emissive) |
 | 2 | Combined Image Sampler | Fragment | Albedo texture + sampler |
-| 3 | Combined Image Sampler | Fragment | Irradiance cubemap (IBL diffuse) |
-| 4 | Combined Image Sampler | Fragment | Prefiltered environment cubemap (IBL specular) |
-| 5 | Combined Image Sampler | Fragment | BRDF integration LUT (2D texture) |
+| 3 | Storage Buffer | Fragment | Light buffer (dynamic lights) |
+| 4 | Combined Image Sampler | Fragment | Normal map |
+| 5 | Combined Image Sampler | Fragment | Metallic map |
+| 6 | Combined Image Sampler | Fragment | Roughness map |
+| 7 | Combined Image Sampler | Fragment | Ambient occlusion map |
+| 8 | Combined Image Sampler | Fragment | Irradiance cubemap (IBL diffuse) |
+| 9 | Combined Image Sampler | Fragment | Prefiltered environment cubemap (IBL specular) |
+| 10 | Combined Image Sampler | Fragment | BRDF integration LUT (2D texture) |
+| 11 | Combined Image Sampler | Fragment | Emissive texture + sampler |
 
-When a material lacks an albedo texture, binding 2 uses a default UV checker texture.
+When a material lacks a specific texture, bindings use appropriate default textures (checker for albedo, flat normal, white for roughness/metallic/AO, black for emissive).
 
 **Note**: Bindings 3-5 are used for Image-Based Lighting (IBL). See [ibl_system.md](ibl_system.md) for details.
 
@@ -88,6 +97,12 @@ struct PushConstants {
 
 **Material Flags**:
 - Bit 0: `HasAlbedoMap` - Set if material has albedo texture
+- Bit 1: `HasNormalMap` - Set if material has normal map
+- Bit 2: `HasMetallicMap` - Set if material has metallic texture
+- Bit 3: `HasRoughnessMap` - Set if material has roughness texture
+- Bit 4: `HasMetallicRoughnessMap` - Set if material has combined metallic-roughness (glTF)
+- Bit 5: `HasAOMap` - Set if material has ambient occlusion map
+- Bit 6: `HasEmissiveMap` - Set if material has emissive texture
 
 **IBL Parameters**:
 - `enableIBL` - Toggle Image-Based Lighting on/off
@@ -580,6 +595,128 @@ std::vector<uint8> fragShaderCode = {
     #include "model.frag.spv.inl"
 };
 ```
+
+## Emissive Textures
+
+**Added**: January 9, 2026
+
+Emissive textures enable materials to emit light independently of scene lighting, creating self-illuminating surfaces for screens, lights, neon signs, or glowing elements.
+
+### Material API
+
+```cpp
+class Material {
+public:
+    // Set emissive texture
+    void SetEmissiveMap(Ref<rhi::Texture> texture);
+
+    // Set emissive color multiplier (can exceed 1.0 for HDR)
+    void SetEmissiveFactor(const glm::vec3& emissive);
+
+    // Query emissive properties
+    Ref<rhi::Texture> GetEmissiveMap() const;
+    const glm::vec3& GetEmissiveFactor() const;
+    bool HasEmissiveMap() const;
+};
+```
+
+### Shader Integration
+
+Emissive contribution is added AFTER lighting calculations but BEFORE tone mapping:
+
+```glsl
+// Binding 11: Emissive texture
+layout(binding = 11) uniform sampler2D emissiveSampler;
+
+// Material uniform (48 bytes with emissiveFactor)
+layout(binding = 1) uniform MaterialUBO {
+    vec3 albedo;
+    float roughness;
+    float metallic;
+    vec2 padding1;
+    vec3 emissiveFactor;  // RGB multiplier for emissive
+    float padding2;
+} material;
+
+void main() {
+    // ... PBR lighting calculations ...
+    vec3 color = ambient + Lo;  // Lighting result
+
+    // Add emissive contribution
+    vec3 emissive = vec3(0.0);
+    if ((pushConstants.materialFlags & (1u << 6)) != 0u) {  // HasEmissiveMap
+        emissive = texture(emissiveSampler, fragTexCoord).rgb * material.emissiveFactor;
+    } else {
+        emissive = material.emissiveFactor;
+    }
+    color += emissive;
+
+    // Tone mapping and gamma correction
+    color = color * pushConstants.exposure;
+    color = clamp(color, 0.0, 1.0);
+    color = pow(color, vec3(1.0/2.2));
+
+    outColor = vec4(color, 1.0);
+}
+```
+
+**Key Points**:
+- Emissive is unaffected by lighting, shadows, or ambient occlusion
+- Added before tone mapping to allow HDR bloom effects
+- emissiveFactor can exceed 1.0 for bright glowing effects
+- Uses default black texture (no emission) when not present
+
+### Example: Creating Glowing Material
+
+```cpp
+// Load emissive texture
+Ref<rhi::Texture> emissiveMap = utils::LoadTexture(device, "assets/glow.png");
+
+// Create material with HDR emissive
+auto material = std::make_unique<Material>();
+material->SetAlbedoMap(albedoTexture);
+material->SetEmissiveMap(emissiveMap);
+material->SetEmissiveFactor(glm::vec3(2.0f, 2.0f, 2.0f));  // 2x brightness (HDR)
+material->SetRoughness(0.8f);
+material->SetMetallic(0.0f);
+
+// Assign to mesh
+mesh->SetMaterial(std::move(material));
+```
+
+### glTF Integration
+
+Emissive properties are automatically extracted from glTF models:
+
+```cpp
+// Model.cpp - ProcessMaterial() extracts:
+// - material.emissiveFactor (vec3, default [0,0,0])
+// - material.emissiveTexture (if present)
+// Final emissive = emissiveTexture.rgb * emissiveFactor
+
+auto model = Model::LoadFromFile(device, "assets/DamagedHelmet.gltf");
+// Emissive textures automatically loaded and applied
+```
+
+**glTF 2.0 Specification**:
+- `pbrMetallicRoughness.emissiveTexture`: RGB texture
+- `pbrMetallicRoughness.emissiveFactor`: RGB multiplier [0-1] or higher for HDR
+- Used for self-illuminating elements (screens, lights, LEDs)
+
+### Default Black Texture
+
+When a material has no emissive map, binding 11 uses a 1x1 black texture (RGB 0,0,0):
+
+```cpp
+// Application.cpp - CreateDefaultTextures()
+uint8_t blackPixel[4] = {0, 0, 0, 255};  // RGBA black
+utils::ImageData blackImage{blackPixel, 1, 1, 4};
+m_DefaultBlackTexture = utils::CreateTextureFromImage(
+    m_Device.get(), blackImage, rhi::Format::R8G8B8A8_UNORM
+);
+```
+
+This ensures all materials have valid emissive bindings, even when not using emissive.
 
 ## Usage Examples
 

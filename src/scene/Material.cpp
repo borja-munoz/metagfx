@@ -11,11 +11,12 @@ Material::Material(const glm::vec3& albedo, float roughness, float metallic) {
     SetAlbedo(albedo);
     SetRoughness(roughness);
     SetMetallic(metallic);
+    SetEmissiveFactor(glm::vec3(0.0f));  // Default: no emission
 
     // Initialize padding to zero
-    m_Properties.padding[0] = 0.0f;
-    m_Properties.padding[1] = 0.0f;
-    m_Properties.padding[2] = 0.0f;
+    m_Properties.padding1[0] = 0.0f;
+    m_Properties.padding1[1] = 0.0f;
+    m_Properties.padding2 = 0.0f;
 }
 
 void Material::SetAlbedo(const glm::vec3& albedo) {
@@ -31,6 +32,12 @@ void Material::SetRoughness(float roughness) {
 void Material::SetMetallic(float metallic) {
     // Clamp metallic to [0, 1] range
     m_Properties.metallic = std::clamp(metallic, 0.0f, 1.0f);
+}
+
+void Material::SetEmissiveFactor(const glm::vec3& emissive) {
+    // Emissive can be > 1.0 for HDR emissive materials
+    // Only clamp to non-negative values
+    m_Properties.emissiveFactor = glm::max(emissive, glm::vec3(0.0f));
 }
 
 void Material::SetAlbedoMap(Ref<rhi::Texture> texture) {
@@ -90,6 +97,16 @@ void Material::SetAOMap(Ref<rhi::Texture> texture) {
         m_TextureFlags |= static_cast<uint32>(MaterialTextureFlags::HasAOMap);
     } else {
         m_TextureFlags &= ~static_cast<uint32>(MaterialTextureFlags::HasAOMap);
+    }
+}
+
+void Material::SetEmissiveMap(Ref<rhi::Texture> texture) {
+    m_EmissiveMap = texture;
+
+    if (texture) {
+        m_TextureFlags |= static_cast<uint32>(MaterialTextureFlags::HasEmissiveMap);
+    } else {
+        m_TextureFlags &= ~static_cast<uint32>(MaterialTextureFlags::HasEmissiveMap);
     }
 }
 

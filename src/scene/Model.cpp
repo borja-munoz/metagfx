@@ -217,6 +217,28 @@ static std::unique_ptr<Material> ProcessMaterial(rhi::GraphicsDevice* device,
         }
     }
 
+    // Extract emissive texture and factor (glTF/PBR)
+    aiColor3D emissiveColor(0.0f, 0.0f, 0.0f);
+    if (aiMat->Get(AI_MATKEY_COLOR_EMISSIVE, emissiveColor) == AI_SUCCESS) {
+        material->SetEmissiveFactor(glm::vec3(emissiveColor.r, emissiveColor.g, emissiveColor.b));
+        METAGFX_INFO << "Emissive factor: (" << emissiveColor.r << ", " << emissiveColor.g << ", " << emissiveColor.b << ")";
+    }
+
+    if (aiMat->GetTextureCount(aiTextureType_EMISSIVE) > 0) {
+        aiString texPath;
+        if (aiMat->GetTexture(aiTextureType_EMISSIVE, 0, &texPath) == AI_SUCCESS) {
+            try {
+                auto texture = LoadTextureFromAssimp(device, scene, texPath.C_Str(), modelDir, true);  // Use SRGB for emissive
+                if (texture) {
+                    material->SetEmissiveMap(texture);
+                    METAGFX_INFO << "Loaded emissive texture: " << texPath.C_Str();
+                }
+            } catch (const std::exception& e) {
+                METAGFX_WARN << "Failed to load emissive texture: " << texPath.C_Str() << " - " << e.what();
+            }
+        }
+    }
+
     // Extract combined metallic-roughness map (glTF standard)
     // In glTF: R channel is unused/occlusion, G is roughness, B is metallic
     if (aiMat->GetTextureCount(aiTextureType_UNKNOWN) > 0) {

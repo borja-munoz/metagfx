@@ -1,6 +1,6 @@
 # Physically-Based Rendering (PBR) System
 
-**Milestone 3.2** - Completed December 2025
+**Milestone 3.2** - Completed December 2025 (Extended with Emissive January 2026)
 
 ## Overview
 
@@ -134,18 +134,19 @@ kD *= 1.0 - metallic;  // Metals have no diffuse
 | Binding | Type | Description |
 |---------|------|-------------|
 | 0 | UBO | MVP matrices (model, view, projection) |
-| 1 | UBO | Material properties (albedo, roughness, metallic) |
+| 1 | UBO | Material properties (albedo, roughness, metallic, emissive) |
 | 2 | Sampler2D | Albedo/base color texture |
-| 3 | SamplerCube | IBL irradiance cubemap (diffuse) |
-| 4 | SamplerCube | IBL prefiltered environment cubemap (specular) |
-| 5 | Sampler2D | IBL BRDF integration LUT |
-| 6 | UBO | Light buffer (up to 16 lights) |
-| 7 | Sampler2D | Normal map |
-| 8 | Sampler2D | Metallic map (or combined metallic-roughness) |
-| 9 | Sampler2D | Roughness map (or combined metallic-roughness) |
-| 10 | Sampler2D | Ambient occlusion map |
+| 3 | Storage Buffer | Light buffer (up to 16 dynamic lights) |
+| 4 | Sampler2D | Normal map |
+| 5 | Sampler2D | Metallic map (or combined metallic-roughness) |
+| 6 | Sampler2D | Roughness map (or combined metallic-roughness) |
+| 7 | Sampler2D | Ambient occlusion map |
+| 8 | SamplerCube | IBL irradiance cubemap (diffuse) |
+| 9 | SamplerCube | IBL prefiltered environment cubemap (specular) |
+| 10 | Sampler2D | IBL BRDF integration LUT |
+| 11 | Sampler2D | **Emissive texture** *(Added January 2026)* |
 
-**Note**: Bindings 3-5 are used for Image-Based Lighting. See [ibl_system.md](ibl_system.md) for details.
+**Note**: Bindings 8-10 are used for Image-Based Lighting. See [ibl_system.md](ibl_system.md) for details.
 
 ### Push Constants
 
@@ -168,6 +169,7 @@ layout(push_constant) uniform PushConstants {
 - Bit 3: HasRoughnessMap
 - Bit 4: HasMetallicRoughnessMap (glTF combined texture)
 - Bit 5: HasAOMap
+- Bit 6: HasEmissiveMap *(Added January 2026)*
 
 **IBL Parameters**:
 - `enableIBL` - Toggle Image-Based Lighting on/off
@@ -201,6 +203,13 @@ The renderer fully supports glTF 2.0 PBR materials with the metallic-roughness w
 - **Color Space**: Linear (UNORM)
 
 This follows the glTF 2.0 specification for packed textures, allowing a single texture sample to provide three material properties.
+
+**Emissive Texture**: `binding = 11` *(Added January 2026)*
+- RGB channels for emissive color
+- Multiplied by `emissiveFactor` (vec3) from material properties
+- **Color Space**: sRGB (for authored colors)
+- **HDR Support**: emissiveFactor can exceed 1.0 for bright glowing effects
+- **Use Case**: Self-illuminating surfaces (screens, lights, neon signs, glowing elements)
 
 ### Separate Texture Support
 
@@ -251,6 +260,104 @@ vec3 getNormalFromMap(vec2 texCoord, vec3 worldPos, vec3 worldNormal) {
 - No need for pre-computed tangent vertex attributes
 - Works with any mesh topology
 - Handles UV discontinuities correctly
+
+### Emissive Rendering
+
+**Added**: January 9, 2026
+**Implementation**: `src/app/model.frag:388-394`
+
+Emissive rendering enables materials to emit light independently of scene lighting, creating self-illuminating surfaces for screens, lights, neon signs, or sci-fi glowing elements.
+
+#### Material Properties
+
+The material uniform buffer (binding 1) includes emissive support:
+
+```glsl
+layout(binding = 1) uniform MaterialUBO {
+    vec3 albedo;          // 12 bytes (offset 0)
+    float roughness;      // 4 bytes  (offset 12)
+    float metallic;       // 4 bytes  (offset 16)
+    vec2 padding1;        // 8 bytes  (offset 20)
+    vec3 emissiveFactor;  // 12 bytes (offset 28) - NEW
+    float padding2;       // 4 bytes  (offset 40)
+} material;  // Total: 48 bytes (was 32 bytes)
+```
+
+#### Shader Integration
+
+Emissive contribution is added **AFTER** lighting calculations but **BEFORE** tone mapping:
+
+```glsl
+// 1. Calculate PBR lighting (direct + IBL)
+vec3 color = ambient + Lo;
+
+// 2. Add emissive contribution (self-illumination)
+vec3 emissive = vec3(0.0);
+if ((pushConstants.materialFlags & (1u << 6)) != 0u) {  // HasEmissiveMap
+    emissive = texture(emissiveSampler, fragTexCoord).rgb * material.emissiveFactor;
+} else {
+    emissive = material.emissiveFactor;  // Flat emissive color
+}
+color += emissive;
+
+// 3. Apply exposure and tone mapping
+color = color * pushConstants.exposure;
+color = clamp(color, 0.0, 1.0);
+```
+
+**Why After Lighting?**
+
+- **Self-illumination**: Emissive is independent of scene lighting (unaffected by shadows, AO, or light intensity)
+- **HDR bloom**: Adding before tone mapping allows emissive values > 1.0 to create bright glowing effects
+- **Energy addition**: Emissive adds light to the scene rather than modulating existing light
+
+#### HDR Emissive Support
+
+The `emissiveFactor` can exceed 1.0 for HDR emissive materials:
+
+```cpp
+// Bright glowing red light (5x intensity)
+material->SetEmissiveFactor(glm::vec3(5.0f, 0.0f, 0.0f));
+
+// Subtle screen glow (1.2x intensity)
+material->SetEmissiveFactor(glm::vec3(1.2f, 1.2f, 1.2f));
+```
+
+**Typical Values**:
+- `vec3(0.0)` - No emission (default)
+- `vec3(1.0)` - Standard emission (matches texture color)
+- `vec3(2.0-5.0)` - Bright glow (HDR, will bloom)
+- `vec3(10.0+)` - Very bright light source effect
+
+#### glTF 2.0 Compliance
+
+The emissive implementation follows glTF 2.0 specification:
+
+```json
+"material": {
+    "emissiveFactor": [1.0, 0.5, 0.0],  // Orange glow
+    "emissiveTexture": {
+        "index": 3  // Texture index
+    }
+}
+```
+
+**Final emissive color**: `emissiveTexture.rgb * emissiveFactor`
+
+#### Use Cases
+
+- **Screens/Displays**: Computer monitors, HUDs, dashboard displays
+- **Light Sources**: Neon signs, LED strips, light fixtures
+- **Sci-Fi Elements**: Energy cores, plasma conduits, holographic projections
+- **Indicators**: Warning lights, status LEDs, glowing buttons
+- **Natural Phenomena**: Lava, bioluminescence, fire embers
+
+#### Example: DamagedHelmet.gltf
+
+The DamagedHelmet model demonstrates emissive rendering:
+- **Visor**: Cyan/blue emissive glow on helmet visor
+- **emissiveFactor**: `[1.0, 1.0, 1.0]` (neutral multiplier)
+- **Effect**: Creates typical sci-fi helmet illumination
 
 ---
 
@@ -308,9 +415,10 @@ The complete post-processing pipeline in order:
 1. **PBR Lighting Calculation**: Cook-Torrance BRDF for all lights
 2. **IBL Contribution**: Image-Based Lighting (diffuse irradiance + specular reflection)
 3. **Ambient Term**: Combine direct lighting and IBL
-4. **Exposure**: Multiply by exposure value
-5. **Tone Mapping**: Simple clamping (HDR → LDR)
-6. **Gamma Correction**: Power 2.2 (linear → sRGB)
+4. **Emissive Contribution**: Add self-illumination *(Added January 2026)*
+5. **Exposure**: Multiply by exposure value
+6. **Tone Mapping**: Simple clamping (HDR → LDR)
+7. **Gamma Correction**: Power 2.2 (linear → sRGB)
 
 ```glsl
 // Direct lighting
@@ -321,8 +429,14 @@ vec3 ambient = (diffuseIBL + specularIBL) * pushConstants.iblIntensity;
 
 // Combine lighting
 vec3 color = ambient + Lo;               // Steps 1-3
-color = color * pushConstants.exposure;  // Step 4
-color = clamp(color, 0.0, 1.0);         // Step 5
+
+// Add emissive (self-illumination)
+vec3 emissive = /* sample emissive texture */;
+color += emissive;                       // Step 4
+
+// Post-processing
+color = color * pushConstants.exposure;  // Step 5
+color = clamp(color, 0.0, 1.0);         // Step 6
 color = pow(color, vec3(1.0/2.2));      // Step 6
 ```
 
@@ -393,6 +507,7 @@ if (model->LoadFromFile(device, "assets/models/DamagedHelmet.glb")) {
     // - Albedo (base color)
     // - Normal map
     // - Metallic-Roughness-AO (combined)
+    // - Emissive (for glowing elements)
 }
 ```
 
@@ -443,6 +558,34 @@ material.SetMetallicRoughnessMap(mrTexture);  // glTF combined
 material.SetNormalMap(normalTexture);
 ```
 
+### Creating Emissive Materials
+
+**Added**: January 9, 2026
+
+```cpp
+// Example 1: Glowing LED indicator
+Material ledMaterial;
+ledMaterial.SetAlbedo(glm::vec3(0.1f, 0.1f, 0.1f));      // Dark base
+ledMaterial.SetEmissiveFactor(glm::vec3(0.0f, 5.0f, 0.0f)); // Bright green glow
+ledMaterial.SetRoughness(0.9f);
+ledMaterial.SetMetallic(0.0f);
+
+// Example 2: Screen with emissive texture
+Material screenMaterial;
+screenMaterial.SetAlbedoMap(screenAlbedoTexture);
+screenMaterial.SetEmissiveMap(screenEmissiveTexture);
+screenMaterial.SetEmissiveFactor(glm::vec3(1.5f, 1.5f, 1.5f)); // Slightly bright
+screenMaterial.SetRoughness(0.3f);
+screenMaterial.SetMetallic(0.0f);
+
+// Example 3: Neon sign (HDR emissive)
+Material neonMaterial;
+neonMaterial.SetAlbedo(glm::vec3(1.0f, 0.0f, 0.5f));  // Pink
+neonMaterial.SetEmissiveFactor(glm::vec3(10.0f, 0.0f, 5.0f)); // Very bright pink
+neonMaterial.SetRoughness(0.5f);
+neonMaterial.SetMetallic(0.0f);
+```
+
 ---
 
 ## Future Enhancements
@@ -457,6 +600,13 @@ material.SetNormalMap(normalTexture);
 - Specular reflection with varying roughness ✅
 
 See [ibl_system.md](ibl_system.md) for complete IBL documentation.
+
+**✅ Emissive Textures (January 2026)**:
+- glTF 2.0 emissive texture support ✅
+- HDR emissiveFactor (values > 1.0) ✅
+- Self-illuminating materials ✅
+- Automatic loading from glTF models ✅
+- Proper rendering order (after lighting, before tone mapping) ✅
 
 ### Potential Optimizations
 

@@ -101,6 +101,7 @@ private:
     Ref<rhi::Texture> m_DefaultTexture;  // Checker pattern for albedo
     Ref<rhi::Texture> m_DefaultNormalMap;  // Flat normal map (128,128,255)
     Ref<rhi::Texture> m_DefaultWhiteTexture;  // White 1x1 for metallic/roughness/AO
+    Ref<rhi::Texture> m_DefaultBlackTexture;  // Black 1x1 for emissive (no emission)
     Ref<rhi::Texture> m_DepthBuffer;  // Depth buffer for 3D rendering
 
     // IBL (Image-Based Lighting) resources

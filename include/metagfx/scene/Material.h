@@ -21,16 +21,19 @@ enum class MaterialTextureFlags : uint32 {
     HasMetallicMap = 1 << 2,            // Bit 2: Metallic texture (grayscale)
     HasRoughnessMap = 1 << 3,           // Bit 3: Roughness texture (grayscale)
     HasMetallicRoughnessMap = 1 << 4,   // Bit 4: Combined metallic-roughness (glTF: G=roughness, B=metallic)
-    HasAOMap = 1 << 5                   // Bit 5: Ambient occlusion map (grayscale)
+    HasAOMap = 1 << 5,                  // Bit 5: Ambient occlusion map (grayscale)
+    HasEmissiveMap = 1 << 6             // Bit 6: Emissive texture (RGB)
 };
 
 // GPU-side structure (std140 layout compatible)
-// Total size: 32 bytes for optimal alignment
+// Total size: 48 bytes for optimal alignment
 struct MaterialProperties {
     glm::vec3 albedo;      // 12 bytes (offset 0)  - Base color
     float roughness;       // 4 bytes  (offset 12) - Surface roughness [0,1]
     float metallic;        // 4 bytes  (offset 16) - Metallic property [0,1]
-    float padding[3];      // 12 bytes (offset 20) - Padding to 32 bytes
+    float padding1[2];     // 8 bytes  (offset 20) - Padding for alignment
+    glm::vec3 emissiveFactor; // 12 bytes (offset 28) - Emissive color multiplier
+    float padding2;        // 4 bytes  (offset 40) - Padding to 48 bytes
 };
 
 class Material {
@@ -44,12 +47,14 @@ public:
     void SetAlbedo(const glm::vec3& albedo);
     void SetRoughness(float roughness);
     void SetMetallic(float metallic);
+    void SetEmissiveFactor(const glm::vec3& emissive);
 
     // Getters
     const MaterialProperties& GetProperties() const { return m_Properties; }
     const glm::vec3& GetAlbedo() const { return m_Properties.albedo; }
     float GetRoughness() const { return m_Properties.roughness; }
     float GetMetallic() const { return m_Properties.metallic; }
+    const glm::vec3& GetEmissiveFactor() const { return m_Properties.emissiveFactor; }
 
     // Texture management
     void SetAlbedoMap(Ref<rhi::Texture> texture);
@@ -76,6 +81,10 @@ public:
     Ref<rhi::Texture> GetAOMap() const { return m_AOMap; }
     bool HasAOMap() const { return (m_TextureFlags & static_cast<uint32>(MaterialTextureFlags::HasAOMap)) != 0; }
 
+    void SetEmissiveMap(Ref<rhi::Texture> texture);
+    Ref<rhi::Texture> GetEmissiveMap() const { return m_EmissiveMap; }
+    bool HasEmissiveMap() const { return (m_TextureFlags & static_cast<uint32>(MaterialTextureFlags::HasEmissiveMap)) != 0; }
+
     uint32 GetTextureFlags() const { return m_TextureFlags; }
 
 private:
@@ -88,6 +97,7 @@ private:
     Ref<rhi::Texture> m_RoughnessMap;
     Ref<rhi::Texture> m_MetallicRoughnessMap;  // Combined texture (glTF standard)
     Ref<rhi::Texture> m_AOMap;
+    Ref<rhi::Texture> m_EmissiveMap;
 
     uint32 m_TextureFlags = 0;
 };

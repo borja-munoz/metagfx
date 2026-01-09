@@ -5,11 +5,14 @@ layout(location = 0) in vec3 fragPosition;
 layout(location = 1) in vec3 fragNormal;
 layout(location = 2) in vec2 fragTexCoord;
 
-// Material uniform
+// Material uniform (48 bytes for std140 alignment)
 layout(binding = 1) uniform MaterialUBO {
-    vec3 albedo;
-    float roughness;
-    float metallic;
+    vec3 albedo;       // 12 bytes (offset 0)
+    float roughness;   // 4 bytes  (offset 12)
+    float metallic;    // 4 bytes  (offset 16)
+    vec2 padding1;     // 8 bytes  (offset 20)
+    vec3 emissiveFactor; // 12 bytes (offset 28)
+    float padding2;    // 4 bytes  (offset 40)
 } material;
 
 // PBR texture samplers
@@ -23,6 +26,9 @@ layout(binding = 7) uniform sampler2D aoSampler;
 layout(binding = 8) uniform samplerCube irradianceMap;
 layout(binding = 9) uniform samplerCube prefilteredMap;
 layout(binding = 10) uniform sampler2D brdfLUT;
+
+// Emissive texture sampler
+layout(binding = 11) uniform sampler2D emissiveSampler;
 
 // Light data structure (64 bytes, matches CPU struct)
 struct LightData {
@@ -373,6 +379,19 @@ void main() {
 
     // Final color: IBL ambient + direct lighting
     vec3 color = ambient + Lo;
+
+    // ============================================================================
+    // EMISSIVE CONTRIBUTION
+    // ============================================================================
+    // Emissive light is self-illumination and is added AFTER lighting but BEFORE tone mapping
+    // This ensures emissive materials can "bloom" in HDR and appear to glow
+    vec3 emissive = vec3(0.0);
+    if ((pushConstants.materialFlags & (1u << 6)) != 0u) {  // HasEmissiveMap
+        emissive = texture(emissiveSampler, fragTexCoord).rgb * material.emissiveFactor;
+    } else {
+        emissive = material.emissiveFactor;
+    }
+    color += emissive;
 
     // Apply exposure control
     color = color * pushConstants.exposure;
