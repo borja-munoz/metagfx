@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 MetaGFX is a backend-agnostic physically-based renderer implementing a common abstract core with multiple graphics API backends (Vulkan, Direct3D 12, Metal, WebGPU). The project is organized around a phased roadmap with milestones tracked in `claude/metagfx_roadmap.md`.
 
-**Current Status**: Milestone 2.3 completed (Textures and Samplers). The renderer can load 3D models from various file formats (OBJ, FBX, glTF, COLLADA), render them with materials (albedo, roughness, metallic), Blinn-Phong lighting, and albedo texture maps.
+**Current Status**: Milestone 3.2 completed (PBR - Physically Based Rendering). The renderer can load 3D models from various file formats (OBJ, FBX, glTF, COLLADA), render them with materials (albedo, roughness, metallic, emissive), Cook-Torrace BRDF, and albedo texture maps.
 
 ## Build Commands
 
@@ -81,15 +81,16 @@ glslangValidator -V src/app/model.vert -o src/app/model.vert.spv
 glslangValidator -V src/app/triangle.frag -o src/app/triangle.frag.spv
 glslangValidator -V src/app/model.frag -o src/app/model.frag.spv
 
-# Convert SPIR-V to C++ include file (manual step or custom script)
+# Convert SPIR-V to C++ include file
 # The .spv files are then converted to .spv.inl files containing byte arrays
+python3 convert_spv.py model.frag.spv model.frag.spv.inl
 ```
 
 The compiled shaders (`.spv.inl` files) are included directly in the C++ source.
 
 **Available Shaders**:
 - `triangle.vert/frag` - Simple vertex color rendering
-- `model.vert/frag` - Full vertex layout with normals and UVs, basic Phong lighting
+- `model.vert/frag` - Full vertex layout with normals and UVs, with PBR lighting
 
 ## Architecture
 
