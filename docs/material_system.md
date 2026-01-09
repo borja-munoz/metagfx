@@ -6,16 +6,17 @@
 
 ## Overview
 
-The Material System provides per-mesh material properties (albedo color, roughness, metallic) and implements Blinn-Phong lighting with ambient, diffuse, and specular components. This system forms the foundation for physically-based rendering (PBR) in later milestones.
+The Material System provides per-mesh material properties (albedo color, roughness, metallic, emissive) with full PBR texture support. This system implements Cook-Torrance BRDF for physically-based rendering with Image-Based Lighting (IBL).
 
 ### Key Features
 
 - **Per-Mesh Materials**: Each mesh owns its material with unique properties
-- **GPU-Compatible Layout**: std140-compliant uniform buffer layout
-- **Blinn-Phong Lighting**: Full lighting model with ambient, diffuse, and specular
-- **Assimp Integration**: Automatic material extraction from model files
-- **Roughness-Based Shininess**: Intuitive roughness parameter controls specular highlight tightness
-- **Extensible Design**: Ready for texture mapping and PBR in future milestones
+- **GPU-Compatible Layout**: std140-compliant uniform buffer layout (48 bytes)
+- **PBR Rendering**: Cook-Torrance BRDF with metallic workflow
+- **Full Texture Support**: Albedo, normal, metallic, roughness, AO, and emissive maps
+- **Emissive Materials**: Self-illuminating surfaces with HDR support
+- **IBL Integration**: Image-Based Lighting with irradiance and prefiltered environment maps
+- **Assimp Integration**: Automatic material extraction from glTF, OBJ, FBX, COLLADA
 
 ---
 
@@ -88,40 +89,36 @@ public:
 
 ## GPU Integration
 
-### Descriptor Set Strategy
+### Descriptor Set Layout
 
-The material system extends the descriptor set layout from 1 binding to 2 bindings:
+The material system uses a comprehensive descriptor set with 12 bindings:
 
 ```
-Descriptor Set Layout:
-┌─────────────┬──────────────────┬────────────┬─────────────┐
-│ Binding     │ Type             │ Size       │ Update Rate │
-├─────────────┼──────────────────┼────────────┼─────────────┤
-│ 0           │ Uniform Buffer   │ 192 bytes  │ Per-frame   │
-│             │ (MVP matrices)   │ (3×mat4)   │ (camera)    │
-├─────────────┼──────────────────┼────────────┼─────────────┤
-│ 1           │ Uniform Buffer   │ 32 bytes   │ Per-mesh    │
-│             │ (Material props) │            │ (material)  │
-└─────────────┴──────────────────┴────────────┴─────────────┘
+Descriptor Set Layout (12 bindings):
+┌──────────┬────────────────────────┬────────────┬─────────────┐
+│ Binding  │ Type                   │ Size       │ Update Rate │
+├──────────┼────────────────────────┼────────────┼─────────────┤
+│ 0        │ Uniform Buffer (MVP)   │ 192 bytes  │ Per-frame   │
+│ 1        │ Uniform Buffer (Mat)   │ 48 bytes   │ Per-mesh    │
+│ 2        │ Texture (Albedo)       │ Variable   │ Per-mesh    │
+│ 3        │ Texture (Normal)       │ Variable   │ Per-mesh    │
+│ 4        │ Texture (Metallic)     │ Variable   │ Per-mesh    │
+│ 5        │ Texture (Roughness)    │ Variable   │ Per-mesh    │
+│ 6        │ Texture (Met/Rough)    │ Variable   │ Per-mesh    │
+│ 7        │ Texture (AO)           │ Variable   │ Per-mesh    │
+│ 8        │ CubeMap (Irradiance)   │ Variable   │ Per-scene   │
+│ 9        │ CubeMap (Prefiltered)  │ Variable   │ Per-scene   │
+│ 10       │ Texture (BRDF LUT)     │ Variable   │ Per-scene   │
+│ 11       │ Texture (Emissive)     │ Variable   │ Per-mesh    │
+└──────────┴────────────────────────┴────────────┴─────────────┘
 ```
 
-**Implementation Details**:
-
-```cpp
-// Application.cpp - CreateModelPipeline()
-std::vector<rhi::DescriptorBinding> bindings = {
-    { 0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_VERTEX_BIT,   m_UniformBuffers[0] },
-    { 1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_FRAGMENT_BIT, m_MaterialBuffers[0] }
-};
-
-m_DescriptorSet = m_Device->CreateDescriptorSet(bindings);
-```
-
-**Buffer Update Strategy**:
-- **MVP Buffer**: Updated once per frame (view/projection changes)
-- **Material Buffer**: Updated per mesh (different materials)
-- **Double Buffering**: Both buffers are double-buffered for frame overlap
-- **CopyData Only**: Update buffer contents via `CopyData()`, not descriptor bindings
+**Update Strategy**:
+- **MVP Buffer**: Updated once per frame (camera/view changes)
+- **Material Buffer**: Updated per mesh (48 bytes, very fast)
+- **Texture Bindings**: Updated per mesh if material changes
+- **IBL Textures** (8-10): Updated when environment changes
+- **Default Textures**: Used when materials lack specific maps
 
 ### Critical Bug Fix: Vector Pointer Invalidation
 
@@ -169,198 +166,145 @@ void VulkanDescriptorSet::UpdateSets(const std::vector<DescriptorBinding>& bindi
 
 ---
 
-## Blinn-Phong Lighting Model
+## PBR Rendering Pipeline
 
-### Shader Implementation
+### Push Constants
 
-The fragment shader implements a complete Blinn-Phong lighting model:
+Push constants provide fast per-frame parameter updates without descriptor set changes:
+
+**Structure** (`src/app/model.frag:50-56`):
 
 ```glsl
-#version 450
-
-// Inputs from vertex shader
-layout(location = 0) in vec3 fragPosition;
-layout(location = 1) in vec3 fragNormal;
-layout(location = 2) in vec2 fragTexCoord;
-
-// Material uniform
-layout(binding = 1) uniform MaterialUBO {
-    vec3 albedo;
-    float roughness;
-    float metallic;
-} material;
-
-// Push constants for camera position
 layout(push_constant) uniform PushConstants {
-    vec4 cameraPosition;
-} pushConstants;
-
-layout(location = 0) out vec4 outColor;
-
-void main() {
-    // Simple directional light
-    vec3 lightDir = normalize(vec3(1.0, 1.0, 1.0));
-    vec3 lightColor = vec3(1.0, 1.0, 1.0);
-
-    vec3 objectColor = material.albedo;
-    vec3 norm = normalize(fragNormal);
-    vec3 viewDir = normalize(pushConstants.cameraPosition.xyz - fragPosition);
-
-    // 1. Ambient: Global illumination approximation
-    float ambientStrength = 0.1;
-    vec3 ambient = ambientStrength * lightColor;
-
-    // 2. Diffuse: Lambertian reflectance
-    float diff = max(dot(norm, lightDir), 0.0);
-    vec3 diffuse = diff * lightColor;
-
-    // 3. Specular: Blinn-Phong highlights
-    vec3 halfDir = normalize(lightDir + viewDir);
-    float shininess = mix(256.0, 16.0, material.roughness);
-    float spec = pow(max(dot(norm, halfDir), 0.0), shininess);
-
-    float specularStrength = 0.5;
-    vec3 specular = specularStrength * spec * lightColor;
-
-    // Combine: (ambient + diffuse) * albedo + specular
-    vec3 result = (ambient + diffuse) * objectColor + specular;
-
-    outColor = vec4(result, 1.0);
-}
+    vec4 cameraPosition;   // 16 bytes (offset 0)  - Camera world position (xyz) + padding
+    uint materialFlags;    // 4 bytes  (offset 16) - Texture presence flags
+    float exposure;        // 4 bytes  (offset 20) - HDR exposure adjustment
+    uint enableIBL;        // 4 bytes  (offset 24) - Image-Based Lighting toggle
+    float iblIntensity;    // 4 bytes  (offset 28) - IBL contribution multiplier
+} pushConstants;           // Total: 32 bytes
 ```
 
-### Lighting Components
-
-**1. Ambient Lighting**
-```glsl
-vec3 ambient = ambientStrength * lightColor;
-```
-- Constant base illumination (0.1 strength)
-- Simulates global indirect lighting
-- Prevents completely black surfaces in shadow
-
-**2. Diffuse Lighting (Lambertian)**
-```glsl
-float diff = max(dot(norm, lightDir), 0.0);
-vec3 diffuse = diff * lightColor;
-```
-- Surface brightness based on angle to light
-- `dot(normal, lightDir)` measures alignment
-- `max(..., 0.0)` clamps to prevent negative values
-- Creates characteristic "matte" appearance
-
-**3. Specular Lighting (Blinn-Phong)**
-```glsl
-vec3 halfDir = normalize(lightDir + viewDir);
-float shininess = mix(256.0, 16.0, material.roughness);
-float spec = pow(max(dot(norm, halfDir), 0.0), shininess);
-vec3 specular = specularStrength * spec * lightColor;
-```
-
-**Key Differences from Phong**:
-- **Phong**: Uses reflection vector `reflect(-lightDir, norm)`
-- **Blinn-Phong**: Uses half-vector `normalize(lightDir + viewDir)`
-- **Advantage**: Half-vector is cheaper to compute and more physically plausible
-- **Visual**: Nearly identical results for most viewing angles
-
-**Roughness to Shininess Mapping**:
-```glsl
-float shininess = mix(256.0, 16.0, material.roughness);
-```
-- **Roughness 0.0** (smooth) → **Shininess 256** → Tight, bright highlights
-- **Roughness 0.5** (medium) → **Shininess 136** → Medium highlights
-- **Roughness 1.0** (rough)  → **Shininess 16**  → Wide, dim highlights
-- **Inverse Relationship**: Higher roughness = lower shininess
-
-**Final Combination**:
-```glsl
-vec3 result = (ambient + diffuse) * objectColor + specular;
-```
-- Ambient and diffuse are **modulated** by albedo (colored)
-- Specular is **additive** (typically white highlights)
-- Matches physical behavior of light reflection
-
-### Push Constants for Camera Position
-
-Camera position is passed via push constants for efficient per-frame updates:
+**Pipeline Layout** (`src/rhi/vulkan/VulkanPipeline.cpp:117-120`):
 
 ```cpp
-// VulkanPipeline.cpp - Pipeline Layout
 VkPushConstantRange pushConstantRange{};
 pushConstantRange.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 pushConstantRange.offset = 0;
-pushConstantRange.size = 16;  // vec4 (16 bytes, using only xyz)
+pushConstantRange.size = 32;  // Full 32-byte structure
+```
 
-// Application.cpp - Render Loop
+**Render Loop Usage** (`src/app/Application.cpp:1006-1116`):
+
+```cpp
+// Push camera position (offset 0, 16 bytes)
 glm::vec4 cameraPos(m_Camera->GetPosition(), 1.0f);
 vkCmd->PushConstants(vkPipeline->GetLayout(),
                     VK_SHADER_STAGE_FRAGMENT_BIT,
                     0, sizeof(glm::vec4), &cameraPos);
+
+// Push material flags (offset 16, 4 bytes)
+uint32_t flags = material->GetTextureFlags();
+vkCmd->PushConstants(vkPipeline->GetLayout(),
+                    VK_SHADER_STAGE_FRAGMENT_BIT,
+                    16, sizeof(uint32_t), &flags);
+
+// Push exposure (offset 20, 4 bytes)
+vkCmd->PushConstants(vkPipeline->GetLayout(),
+                    VK_SHADER_STAGE_FRAGMENT_BIT,
+                    20, sizeof(float), &m_Exposure);
+
+// Push IBL enable flag (offset 24, 4 bytes)
+uint32_t enableIBL = m_EnableIBL ? 1u : 0u;
+vkCmd->PushConstants(vkPipeline->GetLayout(),
+                    VK_SHADER_STAGE_FRAGMENT_BIT,
+                    24, sizeof(uint32_t), &enableIBL);
+
+// Push IBL intensity (offset 28, 4 bytes)
+vkCmd->PushConstants(vkPipeline->GetLayout(),
+                    VK_SHADER_STAGE_FRAGMENT_BIT,
+                    28, sizeof(float), &m_IBLIntensity);
 ```
 
+**Material Flags** (Bit Field):
+- Bit 0 (0x01): HasAlbedoMap
+- Bit 1 (0x02): HasNormalMap
+- Bit 2 (0x04): HasMetallicMap
+- Bit 3 (0x08): HasRoughnessMap
+- Bit 4 (0x10): HasMetallicRoughnessMap
+- Bit 5 (0x20): HasAOMap
+- Bit 6 (0x40): HasEmissiveMap
+
 **Why Push Constants?**:
-- **Performance**: Updated once per frame, not per mesh
-- **Alignment**: vec4 ensures proper 16-byte alignment
-- **Simplicity**: No separate uniform buffer needed
-- **Efficiency**: Push constants are stored in command buffer, very fast access
+- **Performance**: Updated once per frame (camera, exposure, IBL) or per mesh (material flags)
+- **Efficiency**: Stored directly in command buffer, extremely fast GPU access
+- **No Descriptor Updates**: Avoids expensive descriptor set rebinds
+- **Small Size**: 32 bytes fits well within Vulkan's 128-byte guaranteed minimum
 
 ---
 
 ## Assimp Material Extraction
 
-Materials are automatically extracted from model files during loading:
+Materials are automatically extracted from model files during loading with full PBR support:
+
+**PBR Properties** (`src/scene/Model.cpp`):
 
 ```cpp
-static std::unique_ptr<Material> ProcessMaterial(const aiMaterial* aiMat) {
-    // Extract diffuse color
-    aiColor3D diffuse(0.8f, 0.8f, 0.8f);
-    aiMat->Get(AI_MATKEY_COLOR_DIFFUSE, diffuse);
-
-    // Extract shininess and convert to roughness
-    float shininess = 32.0f;
-    aiMat->Get(AI_MATKEY_SHININESS, shininess);
-
-    // Convert shininess to roughness (inverse relationship)
-    // Shininess typically ranges from 0-256 in Blinn-Phong
-    float roughness = 1.0f - glm::clamp(shininess / 256.0f, 0.0f, 1.0f);
-
-    // Default metallic to 0.0 (not available in basic formats like OBJ)
-    float metallic = 0.0f;
-
-    return std::make_unique<Material>(
-        glm::vec3(diffuse.r, diffuse.g, diffuse.b),
-        roughness,
-        metallic
-    );
+// Extract base color (albedo)
+aiColor3D baseColor(0.8f, 0.8f, 0.8f);
+if (aiMat->Get(AI_MATKEY_BASE_COLOR, baseColor) == AI_SUCCESS) {
+    material->SetAlbedo(glm::vec3(baseColor.r, baseColor.g, baseColor.b));
 }
+
+// Extract metallic and roughness factors
+float metallic = 0.0f;
+float roughness = 0.5f;
+aiMat->Get(AI_MATKEY_METALLIC_FACTOR, metallic);
+aiMat->Get(AI_MATKEY_ROUGHNESS_FACTOR, roughness);
+material->SetMetallic(metallic);
+material->SetRoughness(roughness);
+
+// Extract emissive factor
+aiColor3D emissiveColor(0.0f, 0.0f, 0.0f);
+if (aiMat->Get(AI_MATKEY_COLOR_EMISSIVE, emissiveColor) == AI_SUCCESS) {
+    material->SetEmissiveFactor(glm::vec3(emissiveColor.r, emissiveColor.g, emissiveColor.b));
+}
+```
+
+**Texture Loading**:
+
+```cpp
+// Load all PBR texture maps
+LoadTextureMap(aiMat, aiTextureType_BASE_COLOR, material->SetAlbedoMap);
+LoadTextureMap(aiMat, aiTextureType_NORMALS, material->SetNormalMap);
+LoadTextureMap(aiMat, aiTextureType_METALNESS, material->SetMetallicMap);
+LoadTextureMap(aiMat, aiTextureType_DIFFUSE_ROUGHNESS, material->SetRoughnessMap);
+LoadTextureMap(aiMat, aiTextureType_AMBIENT_OCCLUSION, material->SetAOMap);
+LoadTextureMap(aiMat, aiTextureType_EMISSIVE, material->SetEmissiveMap);
+
+// glTF combined metallic-roughness texture
+LoadTextureMap(aiMat, aiTextureType_UNKNOWN, material->SetMetallicRoughnessMap);
 ```
 
 **Extraction Strategy**:
 
-| Assimp Property | Material Property | Conversion |
-|-----------------|-------------------|------------|
-| `AI_MATKEY_COLOR_DIFFUSE` | `albedo` | Direct mapping (RGB) |
-| `AI_MATKEY_SHININESS` | `roughness` | `1.0 - (shininess / 256.0)` |
-| N/A (not in OBJ/FBX) | `metallic` | Default to 0.0 |
-
-**Fallback Strategy**:
-```cpp
-// In ProcessMesh():
-if (scene && aiMesh->mMaterialIndex >= 0) {
-    aiMaterial* aiMat = scene->mMaterials[aiMesh->mMaterialIndex];
-    auto material = ProcessMaterial(aiMat);
-    mesh->SetMaterial(std::move(material));
-} else {
-    // Fallback to default material
-    mesh->SetMaterial(std::make_unique<Material>());
-}
-```
+| Assimp Property | Material Property | Notes |
+|-----------------|-------------------|-------|
+| `AI_MATKEY_BASE_COLOR` | `albedo` | Direct RGB mapping |
+| `AI_MATKEY_METALLIC_FACTOR` | `metallic` | Float [0, 1] |
+| `AI_MATKEY_ROUGHNESS_FACTOR` | `roughness` | Float [0, 1] |
+| `AI_MATKEY_COLOR_EMISSIVE` | `emissiveFactor` | RGB, can exceed 1.0 |
+| `aiTextureType_BASE_COLOR` | `albedoMap` | SRGB color space |
+| `aiTextureType_NORMALS` | `normalMap` | Linear, tangent space |
+| `aiTextureType_METALNESS` | `metallicMap` | Linear grayscale |
+| `aiTextureType_DIFFUSE_ROUGHNESS` | `roughnessMap` | Linear grayscale |
+| `aiTextureType_AMBIENT_OCCLUSION` | `aoMap` | Linear grayscale |
+| `aiTextureType_EMISSIVE` | `emissiveMap` | SRGB color space |
 
 **Supported Formats**:
-- **OBJ**: Diffuse color, shininess from MTL files
-- **FBX**: Full material properties including shininess
-- **glTF**: Metallic-roughness workflow (conversion needed), emissive textures and factors
-- **COLLADA**: Phong materials with diffuse and shininess
+- **glTF 2.0**: Full PBR metallic-roughness workflow, all texture types, emissive support
+- **OBJ**: Basic diffuse color and textures (converted to PBR approximation)
+- **FBX**: Material properties with texture support
+- **COLLADA**: Material extraction with texture paths
 
 ---
 
@@ -712,11 +656,11 @@ mat->SetRoughness(0.2f);                       // Make shinier
 
 **Solution**: Explicitly pad `MaterialProperties` to 32 bytes with `float padding[3]`. Verified with Vulkan validation layers.
 
-### Challenge 3: Shininess to Roughness Mapping
+### Challenge 3: PBR Material Extraction
 
-**Issue**: Different tools use different shininess ranges (0-128, 0-256, 0-1000).
+**Issue**: Different model formats use different material representations (Blinn-Phong vs PBR).
 
-**Solution**: Normalize to 0-256 range with clamping: `1.0 - clamp(shininess / 256.0, 0.0, 1.0)`.
+**Solution**: Detect glTF PBR properties first, fall back to legacy diffuse/specular conversion for OBJ/FBX.
 
 ### Challenge 4: Missing Material Data
 
@@ -752,70 +696,43 @@ mat->SetRoughness(0.2f);                       // Make shinier
 - **Descriptor Binding**: 1 descriptor set bind per frame (12 bindings)
 - **Material Updates**: 48 bytes copy per mesh per frame
 - **Texture Binding Updates**: 1 update per mesh if emissive texture changes
-- **Push Constants**: 24 bytes per frame (camera position + flags + exposure + IBL)
+- **Push Constants**: 32 bytes per frame (camera position + material flags + exposure + IBL settings)
 - **Shader Complexity**: +20 instructions for PBR + emissive (minimal impact)
 
 **Conclusion**: Material system adds negligible overhead to rendering (~5-8% total frame time).
 
 ---
 
-## Future Enhancements
+## Current Implementation Status
 
-### Milestone 2.3: Texture Maps
+### ✅ Completed Features
 
-Replace constant albedo with texture sampling:
+- **PBR Rendering**: Cook-Torrance BRDF with GGX normal distribution
+- **Full Texture Support**: All 7 texture types (albedo, normal, metallic, roughness, AO, metallic-roughness, emissive)
+- **Image-Based Lighting**: Irradiance maps, prefiltered environment maps, BRDF LUT
+- **Material Properties**: Albedo, metallic, roughness, emissive factor
+- **Emissive Materials**: Self-illuminating surfaces with HDR support
+- **Dynamic Lighting**: Point and directional lights with Cook-Torrance specular
+- **Exposure Control**: HDR tone mapping with dynamic exposure adjustment
+- **glTF 2.0 Support**: Full PBR material extraction from glTF models
 
-```glsl
-// Future shader code
-layout(binding = 2) uniform sampler2D albedoMap;
+### Future Enhancements
 
-void main() {
-    vec3 albedo = texture(albedoMap, fragTexCoord).rgb;
-    // ... rest of lighting
-}
-```
+**Material Variants**:
+- Material instancing for memory efficiency
+- Material LOD system (simplified materials for distant objects)
+- Material hot-reloading for rapid iteration
 
-**Required Changes**:
-- Add texture samplers to material
-- Extend descriptor set to include texture bindings
-- Update shader to sample textures
+**Advanced Features**:
+- Clearcoat layer (multi-layer materials)
+- Sheen (fabric rendering)
+- Transmission (glass, translucent materials)
+- Subsurface scattering (skin, wax, marble)
 
-### Phase 3: Physically-Based Rendering (PBR)
-
-Replace Blinn-Phong with PBR:
-
-```glsl
-// Future: Cook-Torrance BRDF
-float D = DistributionGGX(N, H, roughness);
-float G = GeometrySmith(N, V, L, roughness);
-vec3 F = FresnelSchlick(max(dot(H, V), 0.0), F0);
-
-vec3 specular = (D * G * F) / (4.0 * max(dot(N, V), 0.0) * max(dot(N, L), 0.0));
-```
-
-**Required Changes**:
-- Implement microfacet BRDF (GGX normal distribution, Smith geometry, Fresnel-Schlick)
-- Use metallic workflow (base color + metallic + roughness)
-- Add image-based lighting (environment maps)
-
-### Phase 4: Material Library System
-
-Share materials across multiple meshes:
-
-```cpp
-class MaterialLibrary {
-    std::unordered_map<std::string, std::shared_ptr<Material>> m_Materials;
-
-public:
-    std::shared_ptr<Material> GetMaterial(const std::string& name);
-    void RegisterMaterial(const std::string& name, std::shared_ptr<Material> mat);
-};
-```
-
-**Benefits**:
-- Memory savings (shared materials)
-- Centralized material management
-- Hot-reload support
+**Optimization**:
+- Material batching by texture sets
+- Bindless textures (descriptor indexing)
+- Push constants for material properties (currently uniform buffers)
 
 ---
 
@@ -870,16 +787,18 @@ METAGFX_INFO << "Material update: " << duration.count() << "μs";
 
 ### External Resources
 
-- [Learn OpenGL - Basic Lighting](https://learnopengl.com/Lighting/Basic-Lighting)
-- [Learn OpenGL - Materials](https://learnopengl.com/Lighting/Materials)
-- [Blinn-Phong Reflection Model](https://en.wikipedia.org/wiki/Blinn%E2%80%93Phong_reflection_model)
+- [Learn OpenGL - PBR Theory](https://learnopengl.com/PBR/Theory)
+- [Learn OpenGL - PBR Lighting](https://learnopengl.com/PBR/Lighting)
+- [glTF 2.0 Specification](https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html)
 - [Assimp Material System](https://assimp-docs.readthedocs.io/en/latest/usage/use_the_lib.html#materials)
 - [Vulkan Push Constants](https://vkguide.dev/docs/chapter-3/push_constants/)
+- [Physically Based Rendering Book](https://www.pbr-book.org/)
 
 ### Academic Papers
 
-- Blinn, J. F. (1977). "Models of light reflection for computer synthesized pictures"
-- Phong, B. T. (1975). "Illumination for computer generated pictures"
+- Cook, R. L., & Torrance, K. E. (1982). "A Reflectance Model for Computer Graphics"
+- Walter, B., et al. (2007). "Microfacet Models for Refraction through Rough Surfaces"
+- Burley, B. (2012). "Physically-Based Shading at Disney"
 
 ---
 
@@ -888,15 +807,19 @@ METAGFX_INFO << "Material update: " << duration.count() << "μs";
 | Term | Definition |
 |------|------------|
 | **Albedo** | Base color of a surface, independent of lighting |
-| **Roughness** | Surface irregularity (0 = smooth/shiny, 1 = rough/matte) |
-| **Metallic** | Whether surface is metallic (0 = dielectric, 1 = metal) |
+| **Roughness** | Surface irregularity (0 = smooth/mirror, 1 = rough/matte) |
+| **Metallic** | Whether surface is metallic (0 = dielectric/insulator, 1 = conductor/metal) |
 | **Emissive** | Self-illuminating light emitted by a surface, independent of scene lighting |
 | **Emissive Factor** | RGB multiplier for emissive color (can exceed 1.0 for HDR) |
-| **Blinn-Phong** | Lighting model using half-vector for specular highlights |
+| **BRDF** | Bidirectional Reflectance Distribution Function - describes light reflection |
+| **Cook-Torrance** | Microfacet BRDF model using GGX normal distribution and Smith geometry |
+| **PBR** | Physically-Based Rendering - lighting model based on physical light behavior |
+| **IBL** | Image-Based Lighting - environment lighting from cubemap textures |
 | **std140** | GLSL uniform buffer layout standard with specific alignment rules |
-| **Push Constants** | Small amount of data pushed directly into command buffer |
+| **Push Constants** | Small amount of data pushed directly into command buffer (32 bytes) |
 | **Descriptor Set** | Vulkan binding mechanism for shader resources (buffers, textures) |
-| **Shininess** | Exponent controlling specular highlight tightness (legacy term) |
+| **HDR** | High Dynamic Range - color values can exceed 1.0 for bright lights |
+| **Tone Mapping** | Process of converting HDR colors to displayable LDR range |
 
 ---
 
@@ -913,18 +836,20 @@ METAGFX_INFO << "Material update: " << duration.count() << "μs";
 - ✅ HDR emissive support (emissiveFactor can exceed 1.0)
 - ✅ Updated documentation with emissive texture details
 
-### December 23, 2024 - Initial Implementation
+### December 2024 - PBR Implementation
 
-- ✅ Material class with albedo, roughness, metallic
-- ✅ Per-mesh material ownership
-- ✅ Blinn-Phong lighting (ambient + diffuse + specular)
-- ✅ Assimp material extraction (diffuse → albedo, shininess → roughness)
-- ✅ Push constants for camera position
-- ✅ Descriptor set extension (2 bindings)
+- ✅ Material class with albedo, roughness, metallic properties
+- ✅ Per-mesh material ownership with unique_ptr
+- ✅ Cook-Torrance BRDF with GGX normal distribution
+- ✅ Full PBR texture support (albedo, normal, metallic, roughness, AO)
+- ✅ Image-Based Lighting (IBL) with irradiance and prefiltered maps
+- ✅ Assimp material extraction with glTF PBR support
+- ✅ Push constants for camera, material flags, exposure, IBL parameters (32 bytes)
+- ✅ Descriptor set with 12 bindings
 - ✅ Backface culling fix (Clockwise front face for Y-flipped projection)
 - ✅ **Critical bug fix**: Vector pointer invalidation in descriptor set updates
 
 ---
 
-**Status**: ✅ Milestone 2.2 Complete (with Emissive Extension)
-**Next**: Milestone 2.3 - Textures and Samplers (Already Implemented)
+**Status**: ✅ Complete - Full PBR Material System with Textures, IBL, and Emissive Support
+**Related**: See [pbr_rendering.md](pbr_rendering.md), [textures_and_samplers.md](textures_and_samplers.md), [ibl_system.md](ibl_system.md)
