@@ -10,6 +10,7 @@
 #include "metagfx/rhi/vulkan/VulkanShader.h"
 #include "metagfx/rhi/vulkan/VulkanPipeline.h"
 #include "metagfx/rhi/vulkan/VulkanCommandBuffer.h"
+#include "metagfx/rhi/vulkan/VulkanFramebuffer.h"
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_vulkan.h>
@@ -208,6 +209,10 @@ Ref<Texture> VulkanDevice::CreateTexture(const TextureDesc& desc) {
 
 Ref<Sampler> VulkanDevice::CreateSampler(const SamplerDesc& desc) {
     return CreateRef<VulkanSampler>(m_Context, desc);
+}
+
+Ref<Framebuffer> VulkanDevice::CreateFramebuffer(const FramebufferDesc& desc) {
+    return CreateRef<VulkanFramebuffer>(m_Context.device, desc);
 }
 
 Ref<Shader> VulkanDevice::CreateShader(const ShaderDesc& desc) {

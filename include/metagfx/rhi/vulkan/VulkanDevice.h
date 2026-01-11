@@ -23,6 +23,7 @@ public:
     Ref<Sampler> CreateSampler(const SamplerDesc& desc) override;
     Ref<Shader> CreateShader(const ShaderDesc& desc) override;
     Ref<Pipeline> CreateGraphicsPipeline(const PipelineDesc& desc) override;
+    Ref<Framebuffer> CreateFramebuffer(const FramebufferDesc& desc) override;
     
     Ref<CommandBuffer> CreateCommandBuffer() override;
     void SubmitCommandBuffer(Ref<CommandBuffer> commandBuffer) override;

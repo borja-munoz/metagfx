@@ -3,10 +3,12 @@
 # ============================================================================
 set(RENDERER_SOURCES
     Renderer.cpp
+    RasterizationRenderer.cpp
 )
 
 set(RENDERER_HEADERS
     ${CMAKE_SOURCE_DIR}/include/metagfx/renderer/Renderer.h
+    ${CMAKE_SOURCE_DIR}/include/metagfx/renderer/RasterizationRenderer.h
 )
 
 add_library(metagfx_renderer STATIC ${RENDERER_SOURCES} ${RENDERER_HEADERS})

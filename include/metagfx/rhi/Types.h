@@ -247,6 +247,15 @@ struct SamplerDesc {
     float maxLod = 1000.0f;
     bool anisotropyEnable = false;
     float maxAnisotropy = 1.0f;
+    // Comparison sampler for shadow mapping
+    bool enableCompare = false;
+    CompareOp compareOp = CompareOp::Less;
+};
+
+struct FramebufferDesc {
+    Ref<Texture> depthAttachment;  // Required: depth texture
+    std::vector<Ref<Texture>> colorAttachments;  // Optional: color attachments (empty for depth-only)
+    const char* debugName = nullptr;
 };
 
 struct ShaderDesc {

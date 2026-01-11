@@ -83,17 +83,28 @@ device->GetSwapChain()->Present();
 
 3. **Texture** - Texture/image abstraction
    - Dimensions and format queries
-   - Will support sampling and rendering
+   - Supports sampling and rendering targets
+   - Depth textures for shadow mapping
 
-4. **Shader** - Shader module abstraction
+4. **Sampler** - Texture sampling configuration
+   - Filtering modes (linear, nearest)
+   - Address modes (repeat, clamp, mirror)
+   - Comparison samplers for shadow mapping
+
+5. **Framebuffer** - Render target abstraction
+   - Color and depth attachments
+   - Used for off-screen rendering (shadow maps, post-processing)
+   - Depth-only framebuffers for shadow mapping
+
+6. **Shader** - Shader module abstraction
    - Stage identification
    - Bytecode management
 
-5. **Pipeline** - Graphics pipeline state
+7. **Pipeline** - Graphics pipeline state
    - Combines shaders, vertex layout, rasterization state
    - Depth/stencil and blending configuration
 
-6. **CommandBuffer** - Command recording
+8. **CommandBuffer** - Command recording
    - Begin/End recording
    - Render pass management
    - Pipeline binding
@@ -101,7 +112,7 @@ device->GetSwapChain()->Present();
    - Draw commands (indexed and non-indexed)
    - Buffer copies
 
-7. **SwapChain** - Presentation
+9. **SwapChain** - Presentation
    - Back buffer access
    - Present to screen
    - Resize handling
@@ -114,6 +125,8 @@ include/metagfx/rhi/
 ├── GraphicsDevice.h     (Main device interface)
 ├── Buffer.h             (Buffer abstraction)
 ├── Texture.h            (Texture abstraction)
+├── Sampler.h            (Sampler abstraction)
+├── Framebuffer.h        (Framebuffer abstraction)
 ├── Shader.h             (Shader abstraction)
 ├── Pipeline.h           (Pipeline abstraction)
 ├── CommandBuffer.h      (Command recording)

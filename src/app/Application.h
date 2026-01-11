@@ -28,6 +28,8 @@ namespace rhi {
     class VulkanDescriptorSet;
 }
 
+class ShadowMap;
+
 struct ApplicationConfig {
     std::string title = "MetaGFX";
     uint32 width = 1280;
@@ -48,8 +50,11 @@ private:
     void CreateTriangle();
     void CreateModelPipeline();
     void CreateSkyboxPipeline();
+    void CreateShadowPipeline();
     void CreateSkyboxCube();
     void CreateTestLights();
+    void CreateGroundPlane();
+    void UpdateGroundPlanePosition();
     void LoadModel(const std::string& path);
     void LoadNextModel();
     void LoadPreviousModel();
@@ -72,6 +77,7 @@ private:
     Ref<rhi::Pipeline> m_Pipeline;
     Ref<rhi::Pipeline> m_ModelPipeline;
     Ref<rhi::Pipeline> m_SkyboxPipeline;  // Pipeline for skybox rendering
+    Ref<rhi::Pipeline> m_ShadowPipeline;  // Pipeline for shadow map rendering
     Ref<rhi::Buffer> m_SkyboxVertexBuffer;  // Cube vertices for skybox
     Ref<rhi::Buffer> m_SkyboxIndexBuffer;   // Cube indices for skybox
 
@@ -92,8 +98,12 @@ private:
     
     Ref<rhi::Buffer> m_UniformBuffers[2];  // Double buffering for MVP
     Ref<rhi::Buffer> m_MaterialBuffers[2];  // Double buffering for material
+    Ref<rhi::Buffer> m_GroundPlaneMaterialBuffer;  // Dedicated material buffer for ground plane
+    Ref<rhi::Buffer> m_ShadowUniformBuffer;  // Shadow UBO (light space matrix + bias)
     std::unique_ptr<rhi::VulkanDescriptorSet> m_DescriptorSet;
     std::unique_ptr<rhi::VulkanDescriptorSet> m_SkyboxDescriptorSet;  // Separate descriptor set for skybox
+    std::unique_ptr<rhi::VulkanDescriptorSet> m_ShadowDescriptorSet;  // Descriptor set for shadow pass
+    std::unique_ptr<rhi::VulkanDescriptorSet> m_GroundPlaneDescriptorSet;  // Separate descriptor set for ground plane
     uint32 m_CurrentFrame = 0;
 
     // Texture resources
@@ -114,6 +124,16 @@ private:
     // Scene and model
     std::unique_ptr<Scene> m_Scene;
     std::unique_ptr<Model> m_Model;
+    std::unique_ptr<Model> m_GroundPlane;  // Ground plane to visualize shadows
+
+    // Shadow mapping
+    std::unique_ptr<ShadowMap> m_ShadowMap;
+    bool m_EnableShadows = true;
+    float m_ShadowBias = 0.005f;
+    bool m_VisualizeShadowMap = false;  // Debug: Show shadow map directly
+    int m_ShadowDebugMode = 0;  // 0=normal, 1=shadow factor, 2=depth coords
+    bool m_ShowGroundPlane = true;  // Show/hide ground plane
+    glm::vec3 m_LightDirection = glm::vec3(0.5f, -1.0f, -0.3f);  // Direction for main shadow-casting light
 
     // Model management
     std::vector<std::string> m_AvailableModels;
@@ -135,9 +155,9 @@ private:
 
     // GUI parameters
     float m_Exposure = 1.0f;
-    bool m_EnableIBL = true;  // Enable/disable Image-Based Lighting
+    bool m_EnableIBL = false;  // Disable IBL by default for shadow visualization
     float m_IBLIntensity = 0.05f;  // IBL contribution multiplier (default: very subtle)
-    bool m_ShowSkybox = true;  // Show/hide skybox
+    bool m_ShowSkybox = false;  // Hide skybox by default for shadow visualization
     float m_SkyboxLOD = 0.0f;  // Skybox mipmap LOD (0 = sharp, higher = blurred)
     bool m_ShowDemoWindow = false;
 };

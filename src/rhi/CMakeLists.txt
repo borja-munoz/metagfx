@@ -15,6 +15,7 @@ set(RHI_HEADERS
     ${CMAKE_SOURCE_DIR}/include/metagfx/rhi/Pipeline.h
     ${CMAKE_SOURCE_DIR}/include/metagfx/rhi/CommandBuffer.h
     ${CMAKE_SOURCE_DIR}/include/metagfx/rhi/SwapChain.h
+    ${CMAKE_SOURCE_DIR}/include/metagfx/rhi/Framebuffer.h
 )
 
 # Vulkan-specific sources
@@ -30,6 +31,7 @@ if(METAGFX_USE_VULKAN)
         vulkan/VulkanPipeline.cpp
         vulkan/VulkanCommandBuffer.cpp
         vulkan/VulkanDescriptorSet.cpp
+        vulkan/VulkanFramebuffer.cpp
     )
     list(APPEND RHI_HEADERS
         ${CMAKE_SOURCE_DIR}/include/metagfx/rhi/vulkan/VulkanTypes.h
@@ -42,6 +44,7 @@ if(METAGFX_USE_VULKAN)
         ${CMAKE_SOURCE_DIR}/include/metagfx/rhi/vulkan/VulkanPipeline.h
         ${CMAKE_SOURCE_DIR}/include/metagfx/rhi/vulkan/VulkanCommandBuffer.h
         ${CMAKE_SOURCE_DIR}/include/metagfx/rhi/vulkan/VulkanDescriptorSet.h
+        ${CMAKE_SOURCE_DIR}/include/metagfx/rhi/vulkan/VulkanFramebuffer.h
     )
 endif()
 

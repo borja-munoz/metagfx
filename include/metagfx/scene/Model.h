@@ -95,6 +95,11 @@ public:
      */
     float GetBoundingSphereRadius() const;
 
+    /**
+     * @brief Add a mesh to the model (for procedural geometry)
+     */
+    void AddMesh(std::unique_ptr<Mesh> mesh);
+
 private:
     std::vector<std::unique_ptr<Mesh>> m_Meshes;
     std::string m_FilePath;

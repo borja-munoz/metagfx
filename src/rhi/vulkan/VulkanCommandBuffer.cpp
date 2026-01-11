@@ -54,26 +54,35 @@ void VulkanCommandBuffer::BeginRendering(const std::vector<Ref<Texture>>& colorA
                                          Ref<Texture> depthAttachment,
                                          const std::vector<ClearValue>& clearValues) {
 
-    // For this simple implementation, create a basic render pass
-    VkAttachmentDescription colorAttachment{};
-    auto vkTexture = std::static_pointer_cast<VulkanTexture>(colorAttachments[0]);
-    colorAttachment.format = ToVulkanFormat(vkTexture->GetFormat());
-    colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
-    colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    colorAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-    colorAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    colorAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    colorAttachment.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+    // Support both color+depth and depth-only rendering
+    bool hasColorAttachment = !colorAttachments.empty();
+    std::vector<VkAttachmentDescription> attachments;
 
+    // Setup color attachment if provided
+    VkAttachmentDescription colorAttachment{};
     VkAttachmentReference colorAttachmentRef{};
-    colorAttachmentRef.attachment = 0;
-    colorAttachmentRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    Ref<VulkanTexture> vkTexture;
+
+    if (hasColorAttachment) {
+        vkTexture = std::static_pointer_cast<VulkanTexture>(colorAttachments[0]);
+        colorAttachment.format = ToVulkanFormat(vkTexture->GetFormat());
+        colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+        colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        colorAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        colorAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        colorAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        colorAttachment.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+
+        colorAttachmentRef.attachment = 0;
+        colorAttachmentRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+        attachments.push_back(colorAttachment);
+    }
 
     // Setup depth attachment if provided
     VkAttachmentDescription depthAttachmentDesc{};
     VkAttachmentReference depthAttachmentRef{};
-    std::vector<VkAttachmentDescription> attachments = { colorAttachment };
 
     if (depthAttachment) {
         auto vkDepthTexture = std::static_pointer_cast<VulkanTexture>(depthAttachment);
@@ -88,14 +97,15 @@ void VulkanCommandBuffer::BeginRendering(const std::vector<Ref<Texture>>& colorA
 
         attachments.push_back(depthAttachmentDesc);
 
-        depthAttachmentRef.attachment = 1;
+        // Attachment index depends on whether we have a color attachment
+        depthAttachmentRef.attachment = hasColorAttachment ? 1 : 0;
         depthAttachmentRef.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
     }
 
     VkSubpassDescription subpass{};
     subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-    subpass.colorAttachmentCount = 1;
-    subpass.pColorAttachments = &colorAttachmentRef;
+    subpass.colorAttachmentCount = hasColorAttachment ? 1 : 0;
+    subpass.pColorAttachments = hasColorAttachment ? &colorAttachmentRef : nullptr;
     if (depthAttachment) {
         subpass.pDepthStencilAttachment = &depthAttachmentRef;
     }
@@ -108,12 +118,24 @@ void VulkanCommandBuffer::BeginRendering(const std::vector<Ref<Texture>>& colorA
     renderPassInfo.pSubpasses = &subpass;
     
     VK_CHECK(vkCreateRenderPass(m_Context.device, &renderPassInfo, nullptr, &m_CurrentRenderPass));
-    
+
     // Create framebuffer
-    std::vector<VkImageView> framebufferAttachments = { vkTexture->GetImageView() };
+    std::vector<VkImageView> framebufferAttachments;
+    uint32_t fbWidth, fbHeight;
+
+    if (hasColorAttachment) {
+        framebufferAttachments.push_back(vkTexture->GetImageView());
+        fbWidth = vkTexture->GetWidth();
+        fbHeight = vkTexture->GetHeight();
+    }
+
     if (depthAttachment) {
         auto vkDepthTexture = std::static_pointer_cast<VulkanTexture>(depthAttachment);
         framebufferAttachments.push_back(vkDepthTexture->GetImageView());
+        if (!hasColorAttachment) {
+            fbWidth = vkDepthTexture->GetWidth();
+            fbHeight = vkDepthTexture->GetHeight();
+        }
     }
 
     VkFramebufferCreateInfo framebufferInfo{};
@@ -121,8 +143,8 @@ void VulkanCommandBuffer::BeginRendering(const std::vector<Ref<Texture>>& colorA
     framebufferInfo.renderPass = m_CurrentRenderPass;
     framebufferInfo.attachmentCount = static_cast<uint32_t>(framebufferAttachments.size());
     framebufferInfo.pAttachments = framebufferAttachments.data();
-    framebufferInfo.width = vkTexture->GetWidth();
-    framebufferInfo.height = vkTexture->GetHeight();
+    framebufferInfo.width = fbWidth;
+    framebufferInfo.height = fbHeight;
     framebufferInfo.layers = 1;
     
     VK_CHECK(vkCreateFramebuffer(m_Context.device, &framebufferInfo, nullptr, &m_CurrentFramebuffer));
@@ -133,21 +155,30 @@ void VulkanCommandBuffer::BeginRendering(const std::vector<Ref<Texture>>& colorA
     beginInfo.renderPass = m_CurrentRenderPass;
     beginInfo.framebuffer = m_CurrentFramebuffer;
     beginInfo.renderArea.offset = { 0, 0 };
-    beginInfo.renderArea.extent = { vkTexture->GetWidth(), vkTexture->GetHeight() };
+    beginInfo.renderArea.extent = { fbWidth, fbHeight };
 
     // Setup clear values
     std::vector<VkClearValue> vkClearValues;
     if (!clearValues.empty()) {
-        VkClearValue colorClear{};
-        colorClear.color = { clearValues[0].color[0], clearValues[0].color[1],
-                            clearValues[0].color[2], clearValues[0].color[3] };
-        vkClearValues.push_back(colorClear);
-
-        if (depthAttachment && clearValues.size() > 1) {
+        // For depth-only rendering, the first clear value is the depth clear
+        if (!hasColorAttachment && depthAttachment) {
             VkClearValue depthClear{};
-            depthClear.depthStencil.depth = clearValues[1].depthStencil.depth;
-            depthClear.depthStencil.stencil = clearValues[1].depthStencil.stencil;
+            depthClear.depthStencil.depth = clearValues[0].depthStencil.depth;
+            depthClear.depthStencil.stencil = clearValues[0].depthStencil.stencil;
             vkClearValues.push_back(depthClear);
+        } else if (hasColorAttachment) {
+            // For color+depth rendering
+            VkClearValue colorClear{};
+            colorClear.color = { clearValues[0].color[0], clearValues[0].color[1],
+                                clearValues[0].color[2], clearValues[0].color[3] };
+            vkClearValues.push_back(colorClear);
+
+            if (depthAttachment && clearValues.size() > 1) {
+                VkClearValue depthClear{};
+                depthClear.depthStencil.depth = clearValues[1].depthStencil.depth;
+                depthClear.depthStencil.stencil = clearValues[1].depthStencil.stencil;
+                vkClearValues.push_back(depthClear);
+            }
         }
     }
 

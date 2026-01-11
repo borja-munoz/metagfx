@@ -30,6 +30,17 @@ layout(binding = 10) uniform sampler2D brdfLUT;
 // Emissive texture sampler
 layout(binding = 11) uniform sampler2D emissiveSampler;
 
+// Shadow map sampler (comparison sampler for PCF)
+layout(binding = 12) uniform sampler2DShadow shadowMapSampler;
+
+// Shadow uniform with light-space matrix
+layout(binding = 13) uniform ShadowUBO {
+    mat4 lightSpaceMatrix;  // Transform from world space to light space
+    mat4 model;             // Model matrix (not used in fragment shader, but needed for alignment)
+    float shadowBias;       // Bias to prevent shadow acne
+    float padding[3];       // Padding for alignment
+} shadow;
+
 // Light data structure (64 bytes, matches CPU struct)
 struct LightData {
     vec4 positionAndType;    // xyz=position, w=type (0=dir, 1=point, 2=spot)
@@ -53,6 +64,8 @@ layout(push_constant) uniform PushConstants {
     float exposure;
     uint enableIBL;  // 0 = disabled, 1 = enabled
     float iblIntensity;  // IBL contribution multiplier
+    uint shadowDebugMode;  // 0 = normal, 1 = shadow factor, 2 = depth coords
+    uint enableShadows;  // 0 = disabled, 1 = enabled
 } pushConstants;
 
 // Output color
@@ -157,12 +170,59 @@ vec3 getNormalFromMap(vec2 texCoord, vec3 worldPos, vec3 worldNormal) {
 }
 
 // ============================================================================
+// Shadow Mapping with PCF
+// ============================================================================
+
+// Calculate shadow factor using PCF (Percentage Closer Filtering)
+// Returns 0.0 for fully shadowed, 1.0 for fully lit
+float calculateShadow(vec3 fragPos) {
+    // Transform fragment position to light space
+    vec4 fragPosLightSpace = shadow.lightSpaceMatrix * vec4(fragPos, 1.0);
+
+    // Perform perspective divide (for orthographic this doesn't change anything, but we keep it for consistency)
+    vec3 projCoords = fragPosLightSpace.xyz / fragPosLightSpace.w;
+
+    // Transform to [0,1] range for texture sampling
+    // IMPORTANT: In Vulkan, depth is already in [0,1] range, only X/Y need transformation
+    projCoords.xy = projCoords.xy * 0.5 + 0.5;
+    // projCoords.z is already in [0,1] for Vulkan (no transformation needed)
+
+    // Check if fragment is outside shadow map bounds
+    if (projCoords.z > 1.0 || projCoords.x < 0.0 || projCoords.x > 1.0 ||
+        projCoords.y < 0.0 || projCoords.y > 1.0) {
+        return 1.0;  // Outside shadow map = fully lit
+    }
+
+    // Apply depth bias to prevent shadow acne
+    float currentDepth = projCoords.z - shadow.shadowBias;
+
+    // Clamp depth to [0, 1] range
+    currentDepth = clamp(currentDepth, 0.0, 1.0);
+
+    // PCF with 3x3 kernel for soft shadows
+    float shadowFactor = 0.0;
+    vec2 texelSize = 1.0 / textureSize(shadowMapSampler, 0);
+
+    for (int x = -1; x <= 1; x++) {
+        for (int y = -1; y <= 1; y++) {
+            vec2 offset = vec2(x, y) * texelSize;
+            vec3 sampleCoord = vec3(projCoords.xy + offset, currentDepth);
+            // texture() with sampler2DShadow performs hardware PCF comparison
+            shadowFactor += texture(shadowMapSampler, sampleCoord);
+        }
+    }
+    shadowFactor /= 9.0;  // Average the 9 samples
+
+    return shadowFactor;
+}
+
+// ============================================================================
 // PBR Lighting Calculation
 // ============================================================================
 
 // Calculate PBR lighting contribution from a single light using Cook-Torrance BRDF
 vec3 calculatePBRLighting(LightData light, vec3 fragPos, vec3 normal, vec3 viewDir,
-                          vec3 albedo, float roughness, float metallic) {
+                          vec3 albedo, float roughness, float metallic, float shadowFactor) {
     int lightType = int(light.positionAndType.w);
     vec3 lightColor = light.colorAndIntensity.rgb * light.colorAndIntensity.w;
 
@@ -247,8 +307,8 @@ vec3 calculatePBRLighting(LightData light, vec3 fragPos, vec3 normal, vec3 viewD
     // Lambert diffuse BRDF
     float NdotL = max(dot(N, L), 0.0);
 
-    // Final lighting contribution: (diffuse + specular) * radiance * NdotL
-    return (kD * albedo / PI + specular) * radiance * NdotL;
+    // Final lighting contribution: (diffuse + specular) * radiance * NdotL * shadow
+    return (kD * albedo / PI + specular) * radiance * NdotL * shadowFactor;
 }
 
 void main() {
@@ -313,9 +373,17 @@ void main() {
     // For metals, F0 is the albedo color
     vec3 F0 = mix(vec3(0.04), albedo, metallic);
 
+    // Calculate shadow factor (for directional light shadows)
+    // If shadows are disabled, use 1.0 (fully lit)
+    float shadowFactor = (pushConstants.enableShadows != 0u) ? calculateShadow(fragPosition) : 1.0;
+
     // Accumulate lighting from all lights using PBR
     vec3 Lo = vec3(0.0);
     for (uint i = 0u; i < lightBuffer.lightCount && i < 16u; i++) {
+        // Apply shadows ONLY to the first directional light (the shadow casting light)
+        int lightType = int(lightBuffer.lights[i].positionAndType.w);
+        float lightShadow = (i == 0u && lightType == LIGHT_TYPE_DIRECTIONAL) ? shadowFactor : 1.0;
+
         Lo += calculatePBRLighting(
             lightBuffer.lights[i],
             fragPosition,
@@ -323,7 +391,8 @@ void main() {
             V,
             albedo,
             roughness,
-            metallic
+            metallic,
+            lightShadow
         );
     }
 
@@ -437,6 +506,101 @@ void main() {
     // outColor = vec4(vec3(max(dot(N, V), 0.0)), 1.0);  // N·V (fresnel term)
     // float avgLight = (Lo.r + Lo.g + Lo.b) / 3.0;
     // outColor = vec4(vec3(avgLight), 1.0);        // Grayscale lighting intensity
+
+    // Shadow map visualization modes (for debugging)
+    if (pushConstants.shadowDebugMode == 1u) {
+        // Mode 1: Show shadow factor (white = lit, black = shadowed)
+        outColor = vec4(vec3(shadowFactor), 1.0);
+        return;
+    } else if (pushConstants.shadowDebugMode == 2u) {
+        // Mode 2: Show vertex normal as color (normals should definitely vary!)
+        // Normals are in -1 to 1 range, remap to 0-1 for visualization
+        vec3 normalColor = fragNormal * 0.5 + 0.5;
+        outColor = vec4(normalColor, 1.0);
+        return;
+    } else if (pushConstants.shadowDebugMode == 3u) {
+        // Mode 3: Show light-space depth coordinates
+        vec4 fragPosLightSpace = shadow.lightSpaceMatrix * vec4(fragPosition, 1.0);
+        vec3 projCoords = fragPosLightSpace.xyz / fragPosLightSpace.w;
+
+        // DIAGNOSTIC: Show if matrix is working
+        // If fragPosition varies but fragPosLightSpace doesn't, the matrix is identity/broken
+        // Visualize world-space position (should show gradients)
+        vec3 worldViz = abs(fragPosition) / 10.0;  // Normalize by 10 units
+
+        // Show NDC coordinates after light transform
+        // IMPORTANT: In Vulkan, depth (Z) is already in [0,1], only X/Y need transformation
+        vec3 ndcViz;
+        ndcViz.x = projCoords.x * 0.5 + 0.5;
+        ndcViz.y = projCoords.y * 0.5 + 0.5;
+        ndcViz.z = projCoords.z;  // Already in [0,1] for Vulkan
+
+        // Split screen: left half = world position, right half = light-space position
+        if (fragTexCoord.x < 0.5) {
+            // Left: world position (should show color gradients)
+            outColor = vec4(worldViz, 1.0);
+        } else {
+            // Right: light-space position
+            if (ndcViz.x < 0.0 || ndcViz.x > 1.0 || ndcViz.y < 0.0 || ndcViz.y > 1.0) {
+                outColor = vec4(1.0, 0.0, 1.0, 1.0);  // Magenta = out of XY bounds
+            } else if (ndcViz.z < 0.0 || ndcViz.z > 1.0) {
+                outColor = vec4(1.0, 1.0, 0.0, 1.0);  // Yellow = out of depth bounds
+            } else {
+                outColor = vec4(ndcViz, 1.0);
+            }
+        }
+        return;
+    } else if (pushConstants.shadowDebugMode == 4u) {
+        // Mode 4: Sample shadow map depth directly and visualize
+        vec4 fragPosLightSpace = shadow.lightSpaceMatrix * vec4(fragPosition, 1.0);
+        vec3 projCoords = fragPosLightSpace.xyz / fragPosLightSpace.w;
+        // Transform X/Y to [0,1], Z is already in [0,1] for Vulkan
+        projCoords.xy = projCoords.xy * 0.5 + 0.5;
+
+        // Check bounds
+        if (projCoords.x < 0.0 || projCoords.x > 1.0 || projCoords.y < 0.0 || projCoords.y > 1.0) {
+            outColor = vec4(1.0, 0.0, 0.0, 1.0);  // Red = out of bounds
+            return;
+        }
+
+        // Sample the shadow map depth (note: can't directly read depth from sampler2DShadow)
+        // Instead, let's visualize the projected coordinates and current fragment depth
+        float currentDepth = projCoords.z;
+
+        // Visualize: R = projected X, G = projected Y, B = current depth
+        outColor = vec4(projCoords.x, projCoords.y, currentDepth, 1.0);
+        return;
+    } else if (pushConstants.shadowDebugMode == 5u) {
+        // Mode 5: Show just the shadow factor as grayscale (simpler than mode 1)
+        // This helps see if ANY shadowing is happening
+        float sf = (pushConstants.enableShadows != 0u) ? calculateShadow(fragPosition) : 1.0;
+        outColor = vec4(vec3(sf), 1.0);
+        return;
+    } else if (pushConstants.shadowDebugMode == 6u) {
+        // Mode 6: Show detailed shadow sampling debug info
+        vec4 fragPosLightSpace = shadow.lightSpaceMatrix * vec4(fragPosition, 1.0);
+        vec3 projCoords = fragPosLightSpace.xyz / fragPosLightSpace.w;
+        projCoords.xy = projCoords.xy * 0.5 + 0.5;
+
+        // Check if in bounds
+        if (projCoords.x < 0.0 || projCoords.x > 1.0 || projCoords.y < 0.0 || projCoords.y > 1.0) {
+            outColor = vec4(1.0, 0.0, 0.0, 1.0);  // Red = out of XY bounds
+            return;
+        }
+        if (projCoords.z < 0.0 || projCoords.z > 1.0) {
+            outColor = vec4(1.0, 1.0, 0.0, 1.0);  // Yellow = out of Z bounds
+            return;
+        }
+
+        // Sample shadow map at center (no PCF)
+        float currentDepth = projCoords.z - shadow.shadowBias;
+        currentDepth = clamp(currentDepth, 0.0, 1.0);
+        float shadowSample = texture(shadowMapSampler, vec3(projCoords.xy, currentDepth));
+
+        // Show: R = current depth, G = shadow sample result, B = 0
+        outColor = vec4(currentDepth, shadowSample, 0.0, 1.0);
+        return;
+    }
 
     // Final output (default)
     outColor = vec4(color, 1.0);

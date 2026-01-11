@@ -17,6 +17,7 @@ class Shader;
 class Pipeline;
 class CommandBuffer;
 class SwapChain;
+class Framebuffer;
 
 class GraphicsDevice {
 public:
@@ -31,6 +32,7 @@ public:
     virtual Ref<Sampler> CreateSampler(const SamplerDesc& desc) = 0;
     virtual Ref<Shader> CreateShader(const ShaderDesc& desc) = 0;
     virtual Ref<Pipeline> CreateGraphicsPipeline(const PipelineDesc& desc) = 0;
+    virtual Ref<Framebuffer> CreateFramebuffer(const FramebufferDesc& desc) = 0;
     
     // Command buffer management
     virtual Ref<CommandBuffer> CreateCommandBuffer() = 0;

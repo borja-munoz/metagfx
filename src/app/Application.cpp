@@ -21,6 +21,7 @@
 #include "metagfx/scene/Camera.h"
 #include "metagfx/scene/Material.h"
 #include "metagfx/scene/Mesh.h"
+#include "metagfx/scene/ShadowMap.h"
 #include "metagfx/utils/TextureUtils.h"
 #include <SDL3/SDL.h>
 #include <glm/glm.hpp>
@@ -114,6 +115,22 @@ void Application::Init() {
 
     m_MaterialBuffers[0] = m_Device->CreateBuffer(materialBufferDesc);
     m_MaterialBuffers[1] = m_Device->CreateBuffer(materialBufferDesc);
+
+    // Create ground plane material buffer (dedicated to avoid conflicts)
+    m_GroundPlaneMaterialBuffer = m_Device->CreateBuffer(materialBufferDesc);
+
+    // Create shadow uniform buffer
+    struct ShadowUBO {
+        glm::mat4 lightSpaceMatrix;
+        glm::mat4 model;  // Model matrix
+        float shadowBias;
+        float padding[3];
+    };
+    BufferDesc shadowBufferDesc{};
+    shadowBufferDesc.size = sizeof(ShadowUBO);
+    shadowBufferDesc.usage = BufferUsage::Uniform;
+    shadowBufferDesc.memoryUsage = MemoryUsage::CPUToGPU;
+    m_ShadowUniformBuffer = m_Device->CreateBuffer(shadowBufferDesc);
 
     // Create shared sampler
     rhi::SamplerDesc samplerDesc{};
@@ -253,7 +270,10 @@ void Application::Init() {
     // Upload light data to GPU before creating descriptor sets
     m_Scene->UpdateLightBuffer();
 
-    // Create descriptor set with 12 bindings (Phase 3.2: Added IBL textures + emissive)
+    // Create shadow map (2048x2048 default resolution)
+    m_ShadowMap = std::make_unique<ShadowMap>(m_Device, 2048, 2048);
+
+    // Create descriptor set with 14 bindings (added shadow map sampler and shadow UBO)
     std::vector<rhi::DescriptorBinding> bindings = {
         {
             0,  // binding = 0 (MVP matrices)
@@ -350,12 +370,68 @@ void Application::Init() {
             nullptr,  // buffer
             m_DefaultBlackTexture,  // Default: no emission
             m_LinearRepeatSampler
+        },
+        {
+            12,  // binding = 12 (Shadow map sampler - comparison sampler)
+            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+            VK_SHADER_STAGE_FRAGMENT_BIT,
+            nullptr,  // buffer
+            m_ShadowMap->GetDepthTexture(),
+            m_ShadowMap->GetSampler()
+        },
+        {
+            13,  // binding = 13 (Shadow UBO - light space matrix + bias)
+            VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+            VK_SHADER_STAGE_FRAGMENT_BIT,
+            m_ShadowUniformBuffer,
+            nullptr,  // texture
+            nullptr   // sampler
         }
     };
 
     m_DescriptorSet = std::make_unique<rhi::VulkanDescriptorSet>(
         std::static_pointer_cast<rhi::VulkanDevice>(m_Device)->GetContext(),
         bindings
+    );
+
+    // Create ground plane descriptor set (same layout as model, but separate instance)
+    // We MUST use the same layout because they share the same pipeline
+    std::vector<rhi::DescriptorBinding> groundPlaneBindings = bindings;  // Copy all bindings
+
+    // CRITICAL: Array index corresponds to binding number!
+    // Index 0 = binding 0 (MVP), Index 1 = binding 1 (Material), Index 2 = binding 2 (Albedo), etc.
+
+    // Use dedicated material buffer for ground plane (binding 1 = index 1)
+    groundPlaneBindings[1].buffer = m_GroundPlaneMaterialBuffer;  // Dedicated material buffer
+
+    // Set default textures for ground plane
+    groundPlaneBindings[2].texture = m_DefaultWhiteTexture;   // binding 2: Albedo
+    groundPlaneBindings[4].texture = m_DefaultNormalMap;      // binding 4: Normal
+    groundPlaneBindings[5].texture = m_DefaultWhiteTexture;   // binding 5: Metallic
+    groundPlaneBindings[6].texture = m_DefaultWhiteTexture;   // binding 6: Roughness
+    groundPlaneBindings[7].texture = m_DefaultWhiteTexture;   // binding 7: AO
+    groundPlaneBindings[11].texture = m_DefaultBlackTexture;  // binding 11: Emissive (black = no glow)
+
+    m_GroundPlaneDescriptorSet = std::make_unique<rhi::VulkanDescriptorSet>(
+        std::static_pointer_cast<rhi::VulkanDevice>(m_Device)->GetContext(),
+        groundPlaneBindings
+    );
+
+    // Create shadow descriptor set (for shadow pass rendering)
+    std::vector<rhi::DescriptorBinding> shadowBindings = {
+        {
+            0,  // binding = 0 (Shadow UBO with light space matrix)
+            VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+            VK_SHADER_STAGE_VERTEX_BIT,
+            m_ShadowUniformBuffer,
+            nullptr,  // texture
+            nullptr   // sampler
+        }
+    };
+
+    m_ShadowDescriptorSet = std::make_unique<rhi::VulkanDescriptorSet>(
+        std::static_pointer_cast<rhi::VulkanDevice>(m_Device)->GetContext(),
+        shadowBindings
     );
 
     // Create skybox descriptor set with 2 bindings
@@ -400,6 +476,12 @@ void Application::Init() {
     );
     CreateSkyboxPipeline();
 
+    // Create shadow pipeline with shadow descriptor set layout
+    std::static_pointer_cast<rhi::VulkanDevice>(m_Device)->SetDescriptorSetLayout(
+        m_ShadowDescriptorSet->GetLayout()
+    );
+    CreateShadowPipeline();
+
     // Restore main descriptor set layout
     std::static_pointer_cast<rhi::VulkanDevice>(m_Device)->SetDescriptorSetLayout(
         m_DescriptorSet->GetLayout()
@@ -419,6 +501,9 @@ void Application::Init() {
 
     // Load initial model
     LoadModel(m_AvailableModels[m_CurrentModelIndex]);
+
+    // Create ground plane for shadow visualization
+    CreateGroundPlane();
 
     METAGFX_INFO << "Controls:";
     METAGFX_INFO << "  WASD/QE - Camera movement";
@@ -464,6 +549,9 @@ void Application::LoadModel(const std::string& path) {
     // Frame the camera to view the model with 30% margin
     m_Camera->FrameBoundingBox(center, size, 1.3f);
 
+    // Update ground plane position based on model bounds
+    UpdateGroundPlanePosition();
+
     METAGFX_INFO << "Camera framed at position: ("
                  << m_Camera->GetPosition().x << ", "
                  << m_Camera->GetPosition().y << ", "
@@ -482,8 +570,10 @@ void Application::LoadPreviousModel() {
 
 void Application::CreateTestLights() {
     // Key light: Front-top directional light (main illumination)
+    // Modified to cast more obvious shadows - light comes from above-left-front
+    // This is the shadow-casting light, direction controlled by m_LightDirection
     auto keyLight = std::make_unique<DirectionalLight>(
-        glm::vec3(0.2f, -0.5f, -1.0f),    // Direction: from front-top toward model
+        m_LightDirection,                  // Direction: controlled via UI
         glm::vec3(1.0f, 1.0f, 1.0f),      // Pure white for neutral lighting
         5.0f                               // High intensity for main light
     );
@@ -515,6 +605,74 @@ void Application::CreateTestLights() {
     m_Scene->AddLight(std::move(pointLight));
 
     METAGFX_INFO << "Created " << m_Scene->GetLightCount() << " test lights";
+}
+
+void Application::CreateGroundPlane() {
+    // Ground plane will be created/updated dynamically when a model is loaded
+    // See UpdateGroundPlanePosition()
+}
+
+void Application::UpdateGroundPlanePosition() {
+    using namespace rhi;
+
+    if (!m_Model || !m_Model->IsValid()) {
+        return;
+    }
+
+    // Get model bounding box
+    glm::vec3 minBounds, maxBounds;
+    if (!m_Model->GetBoundingBox(minBounds, maxBounds)) {
+        return;
+    }
+
+    // Position ground plane below the model's lowest point
+    // Add offset to ensure it's clearly below and avoid shadow acne
+    float modelHeight = maxBounds.y - minBounds.y;
+    float offset = glm::max(modelHeight * 0.3f, 0.5f);  // 30% of model height OR minimum 0.5 units
+    float groundY = minBounds.y - offset;
+
+    METAGFX_INFO << "Model Y bounds: min=" << minBounds.y << ", max=" << maxBounds.y
+                 << ", ground plane Y=" << groundY;
+
+    // Make ground plane large enough to show shadows
+    float planeSize = glm::max(maxBounds.x - minBounds.x, maxBounds.z - minBounds.z) * 2.0f;
+    planeSize = glm::max(planeSize, 15.0f);  // Minimum 15 units
+
+    // Create a simple quad (two triangles) for the ground plane
+    std::vector<Vertex> vertices = {
+        // Position                                    Normal              TexCoord
+        { { -planeSize, groundY, -planeSize }, { 0.0f, 1.0f, 0.0f }, { 0.0f, 0.0f } },
+        { {  planeSize, groundY, -planeSize }, { 0.0f, 1.0f, 0.0f }, { 10.0f, 0.0f } },
+        { {  planeSize, groundY,  planeSize }, { 0.0f, 1.0f, 0.0f }, { 10.0f, 10.0f } },
+        { { -planeSize, groundY,  planeSize }, { 0.0f, 1.0f, 0.0f }, { 0.0f, 10.0f } }
+    };
+
+    std::vector<uint32> indices = {
+        0, 2, 1,  // First triangle (clockwise from above = front face visible from below/side)
+        2, 0, 3   // Second triangle (clockwise from above = front face visible from below/side)
+    };
+
+    // Log vertex coordinates for debugging
+    METAGFX_INFO << "Ground plane vertices:";
+    METAGFX_INFO << "  Vertex 0: (" << vertices[0].position.x << ", " << vertices[0].position.y << ", " << vertices[0].position.z << ")";
+    METAGFX_INFO << "  Vertex 1: (" << vertices[1].position.x << ", " << vertices[1].position.y << ", " << vertices[1].position.z << ")";
+    METAGFX_INFO << "  Vertex 2: (" << vertices[2].position.x << ", " << vertices[2].position.y << ", " << vertices[2].position.z << ")";
+    METAGFX_INFO << "  Vertex 3: (" << vertices[3].position.x << ", " << vertices[3].position.y << ", " << vertices[3].position.z << ")";
+    METAGFX_INFO << "  Indices: [" << indices[0] << "," << indices[1] << "," << indices[2] << "], [" << indices[3] << "," << indices[4] << "," << indices[5] << "]";
+
+    // Recreate ground plane
+    if (m_GroundPlane) {
+        m_GroundPlane->Cleanup();
+    }
+    m_GroundPlane = std::make_unique<Model>();
+    auto mesh = std::make_unique<Mesh>();
+    if (mesh->Initialize(m_Device.get(), vertices, indices)) {
+        m_GroundPlane->AddMesh(std::move(mesh));
+        METAGFX_INFO << "Ground plane positioned at Y=" << groundY
+                     << ", size=" << (planeSize * 2.0f) << "x" << (planeSize * 2.0f);
+    } else {
+        METAGFX_ERROR << "Failed to initialize ground plane mesh";
+    }
 }
 
 void Application::CreateTriangle() {
@@ -684,6 +842,60 @@ void Application::CreateSkyboxPipeline() {
     m_SkyboxPipeline = m_Device->CreateGraphicsPipeline(pipelineDesc);
 
     METAGFX_INFO << "Skybox pipeline created";
+}
+
+void Application::CreateShadowPipeline() {
+    using namespace rhi;
+
+    // Load shadow map shaders (SPIR-V bytecode)
+    std::vector<uint8> vertShaderCode = {
+        #include "shadowmap.vert.spv.inl"
+    };
+
+    ShaderDesc vertShaderDesc{};
+    vertShaderDesc.stage = ShaderStage::Vertex;
+    vertShaderDesc.code = vertShaderCode;
+    vertShaderDesc.entryPoint = "main";
+
+    auto vertShader = m_Device->CreateShader(vertShaderDesc);
+
+    std::vector<uint8> fragShaderCode = {
+        #include "shadowmap.frag.spv.inl"
+    };
+
+    ShaderDesc fragShaderDesc{};
+    fragShaderDesc.stage = ShaderStage::Fragment;
+    fragShaderDesc.code = fragShaderCode;
+    fragShaderDesc.entryPoint = "main";
+
+    auto fragShader = m_Device->CreateShader(fragShaderDesc);
+
+    // Create pipeline for shadow map rendering (depth-only)
+    PipelineDesc pipelineDesc{};
+    pipelineDesc.vertexShader = vertShader;
+    pipelineDesc.fragmentShader = fragShader;
+
+    // Vertex input: position (vec3) only
+    pipelineDesc.vertexInput.stride = sizeof(Vertex);
+    pipelineDesc.vertexInput.attributes = {
+        { 0, Format::R32G32B32_SFLOAT, 0 }  // position at location 0
+    };
+
+    pipelineDesc.topology = PrimitiveTopology::TriangleList;
+    pipelineDesc.rasterization.cullMode = CullMode::Back;
+    pipelineDesc.rasterization.frontFace = FrontFace::CounterClockwise;
+    pipelineDesc.rasterization.depthBiasEnable = true;  // Enable depth bias to reduce shadow acne
+    pipelineDesc.rasterization.depthBiasConstantFactor = 1.25f;
+    pipelineDesc.rasterization.depthBiasSlopeFactor = 1.75f;
+
+    // Enable depth testing and writing for shadow map
+    pipelineDesc.depthStencil.depthTestEnable = true;
+    pipelineDesc.depthStencil.depthWriteEnable = true;
+    pipelineDesc.depthStencil.depthCompareOp = CompareOp::Less;  // Standard: closer fragments win
+
+    m_ShadowPipeline = m_Device->CreateGraphicsPipeline(pipelineDesc);
+
+    METAGFX_INFO << "Shadow pipeline created";
 }
 
 void Application::CreateSkyboxCube() {
@@ -964,7 +1176,179 @@ void Application::Render() {
             VK_ACCESS_UNIFORM_READ_BIT  // dstAccess: Shader uniform reads
         );
     }
-    
+
+    // =============================================================================
+    // Shadow Pass: Render scene from light's perspective to shadow map
+    // =============================================================================
+
+    // Debug: Log shadow pass conditions
+    static bool loggedConditions = false;
+    if (!loggedConditions) {
+        METAGFX_INFO << "Shadow pass conditions: EnableShadows=" << m_EnableShadows
+                     << ", ShadowMap=" << (m_ShadowMap ? "valid" : "null")
+                     << ", Model=" << (m_Model ? "valid" : "null")
+                     << ", ModelIsValid=" << (m_Model && m_Model->IsValid() ? "true" : "false");
+        loggedConditions = true;
+    }
+
+    if (m_EnableShadows && m_ShadowMap && m_Model && m_Model->IsValid()) {
+        // Debug: Log shadow pass execution
+        static bool loggedShadowPass = false;
+        if (!loggedShadowPass) {
+            METAGFX_INFO << "Executing shadow pass - rendering " << m_Model->GetMeshes().size() << " meshes";
+            loggedShadowPass = true;
+        }
+
+        // Get the first directional light for shadow casting
+        DirectionalLight* shadowLight = nullptr;
+        for (const auto& light : m_Scene->GetLights()) {
+            if (auto* dirLight = dynamic_cast<DirectionalLight*>(light.get())) {
+                shadowLight = dirLight;
+                break;
+            }
+        }
+
+        if (shadowLight) {
+            // Update the light direction from UI control
+            shadowLight->SetDirection(m_LightDirection);
+
+            // Update shadow map light matrix
+            m_ShadowMap->UpdateLightMatrix(shadowLight->GetDirection(), *m_Camera);
+
+            // Update shadow uniform buffer
+            struct ShadowUBO {
+                glm::mat4 lightSpaceMatrix;
+                glm::mat4 model;  // Model matrix (identity for now)
+                float shadowBias;
+                float padding[3];
+            };
+            ShadowUBO shadowUBO{};
+            shadowUBO.lightSpaceMatrix = m_ShadowMap->GetLightSpaceMatrix();
+            shadowUBO.model = glm::mat4(1.0f);  // Identity matrix
+            shadowUBO.shadowBias = m_ShadowBias;
+
+            // Debug: Log light space matrix (ALL rows)
+            static bool loggedMatrix = false;
+            if (!loggedMatrix) {
+                const auto& m = shadowUBO.lightSpaceMatrix;
+                METAGFX_INFO << "LightSpaceMatrix row 0: (" << m[0][0] << ", " << m[1][0] << ", " << m[2][0] << ", " << m[3][0] << ")";
+                METAGFX_INFO << "LightSpaceMatrix row 1: (" << m[0][1] << ", " << m[1][1] << ", " << m[2][1] << ", " << m[3][1] << ")";
+                METAGFX_INFO << "LightSpaceMatrix row 2: (" << m[0][2] << ", " << m[1][2] << ", " << m[2][2] << ", " << m[3][2] << ")";
+                METAGFX_INFO << "LightSpaceMatrix row 3: (" << m[0][3] << ", " << m[1][3] << ", " << m[2][3] << ", " << m[3][3] << ")";
+                loggedMatrix = true;
+            }
+
+            m_ShadowUniformBuffer->CopyData(&shadowUBO, sizeof(shadowUBO));
+
+            // Begin shadow rendering pass (depth-only)
+            // Note: BeginRendering will handle layout transitions via the render pass
+            ClearValue shadowDepthClear{};
+            shadowDepthClear.depthStencil.depth = 1.0f;  // Standard: far plane
+            shadowDepthClear.depthStencil.stencil = 0;
+
+            cmd->BeginRendering({}, m_ShadowMap->GetDepthTexture(), { shadowDepthClear });
+
+            // Set viewport and scissor for shadow map
+            Viewport shadowViewport{};
+            shadowViewport.width = static_cast<float>(m_ShadowMap->GetWidth());
+            shadowViewport.height = static_cast<float>(m_ShadowMap->GetHeight());
+            shadowViewport.minDepth = 0.0f;
+            shadowViewport.maxDepth = 1.0f;
+            cmd->SetViewport(shadowViewport);
+
+            Rect2D shadowScissor{};
+            shadowScissor.width = m_ShadowMap->GetWidth();
+            shadowScissor.height = m_ShadowMap->GetHeight();
+            cmd->SetScissor(shadowScissor);
+
+            // Bind shadow pipeline
+            cmd->BindPipeline(m_ShadowPipeline);
+
+            // Bind shadow descriptor set
+            auto vkShadowPipeline = std::static_pointer_cast<VulkanPipeline>(m_ShadowPipeline);
+            vkCmd->BindDescriptorSet(vkShadowPipeline->GetLayout(),
+                                     m_ShadowDescriptorSet->GetSet(0));
+
+            // Render all meshes from light's perspective
+            uint32 meshesRendered = 0;
+            for (const auto& mesh : m_Model->GetMeshes()) {
+                if (mesh && mesh->IsValid()) {
+                    // Draw mesh (model matrix is in the uniform buffer)
+                    cmd->BindVertexBuffer(mesh->GetVertexBuffer());
+                    cmd->BindIndexBuffer(mesh->GetIndexBuffer());
+                    cmd->DrawIndexed(mesh->GetIndexCount());
+                    meshesRendered++;
+
+                    // Debug: Log draw call details
+                    static bool loggedDrawCall = false;
+                    if (!loggedDrawCall) {
+                        METAGFX_INFO << "Shadow pass draw call: " << mesh->GetIndexCount()
+                                     << " indices, vertex buffer valid: " << (mesh->GetVertexBuffer() ? "yes" : "no")
+                                     << ", index buffer valid: " << (mesh->GetIndexBuffer() ? "yes" : "no");
+                        loggedDrawCall = true;
+                    }
+                }
+            }
+
+            // NOTE: Do NOT render ground plane in shadow pass!
+            // The ground plane should RECEIVE shadows, not CAST them.
+            // Rendering it here would write its depth to the shadow map and interfere
+            // with shadow calculations.
+
+            // Debug: Log model info once per model load (using frame counter to rate-limit)
+            static int lastLoggedFrame = -100;
+            static int frameCounter = 0;
+            frameCounter++;
+
+            if (frameCounter - lastLoggedFrame > 60) {  // Log every 60 frames (once per second at 60fps)
+                METAGFX_INFO << "Shadow pass rendered " << meshesRendered << " meshes";
+
+                // Log model bounding box to verify it's within shadow frustum
+                glm::vec3 minBounds, maxBounds;
+                if (m_Model->GetBoundingBox(minBounds, maxBounds)) {
+                    METAGFX_INFO << "Model bounds: min(" << minBounds.x << ", " << minBounds.y
+                                 << ", " << minBounds.z << "), max(" << maxBounds.x << ", "
+                                 << maxBounds.y << ", " << maxBounds.z << ")";
+                    glm::vec3 center = (minBounds + maxBounds) * 0.5f;
+                    glm::vec3 size = maxBounds - minBounds;
+                    METAGFX_INFO << "Model center: (" << center.x << ", " << center.y << ", "
+                                 << center.z << "), size: (" << size.x << ", " << size.y
+                                 << ", " << size.z << ")";
+                }
+
+                lastLoggedFrame = frameCounter;
+            }
+
+            cmd->EndRendering();
+
+            // Add pipeline barrier to ensure shadow map writes complete before sampling
+            auto vkShadowTexture = std::static_pointer_cast<VulkanTexture>(m_ShadowMap->GetDepthTexture());
+            VkImageMemoryBarrier shadowBarrier{};
+            shadowBarrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            shadowBarrier.oldLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+            shadowBarrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            shadowBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            shadowBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            shadowBarrier.image = vkShadowTexture->GetImage();
+            shadowBarrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+            shadowBarrier.subresourceRange.baseMipLevel = 0;
+            shadowBarrier.subresourceRange.levelCount = 1;
+            shadowBarrier.subresourceRange.baseArrayLayer = 0;
+            shadowBarrier.subresourceRange.layerCount = 1;
+            shadowBarrier.srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+            shadowBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+
+            vkCmdPipelineBarrier(vkCmd->GetHandle(),
+                                VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
+                                VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                                0, 0, nullptr, 0, nullptr, 1, &shadowBarrier);
+        }
+    }
+
+    // =============================================================================
+    // Main Pass: Render scene with shadow sampling
+    // =============================================================================
+
     // Begin rendering
     ClearValue colorClear{};
     colorClear.color[0] = 0.1f;
@@ -996,10 +1380,10 @@ void Application::Render() {
         // Bind model pipeline
         cmd->BindPipeline(m_ModelPipeline);
 
-        // Bind descriptor set (using set 0, all buffers point to [0])
+        // Bind descriptor set (use current frame index for double buffering)
         auto vkPipeline = std::static_pointer_cast<VulkanPipeline>(m_ModelPipeline);
         vkCmd->BindDescriptorSet(vkPipeline->GetLayout(),
-                                 m_DescriptorSet->GetSet(0));
+                                 m_DescriptorSet->GetSet(m_CurrentFrame));
 
         // Push camera position for specular lighting
         glm::vec4 cameraPos(m_Camera->GetPosition(), 1.0f);
@@ -1075,7 +1459,7 @@ void Application::Render() {
 
                 // Re-bind descriptor set after texture updates
                 vkCmd->BindDescriptorSet(vkPipeline->GetLayout(),
-                                        m_DescriptorSet->GetSet(0));
+                                        m_DescriptorSet->GetSet(m_CurrentFrame));
 
                 // Push material flags and exposure (offset 16 bytes after cameraPosition vec4)
                 uint32_t flags = material->GetTextureFlags();
@@ -1115,7 +1499,69 @@ void Application::Render() {
                                     VK_SHADER_STAGE_FRAGMENT_BIT,
                                     28, sizeof(float), &m_IBLIntensity);
 
+                // Push shadow debug mode (offset 32, size 4)
+                uint32_t shadowDebugMode = static_cast<uint32_t>(m_ShadowDebugMode);
+
+                // Debug: Log shadow debug mode on first frame
+                static bool loggedDebugMode = false;
+                if (!loggedDebugMode) {
+                    METAGFX_INFO << "Shadow debug mode being pushed to shader: " << shadowDebugMode;
+                    loggedDebugMode = true;
+                }
+
+                vkCmd->PushConstants(vkPipeline->GetLayout(),
+                                    VK_SHADER_STAGE_FRAGMENT_BIT,
+                                    32, sizeof(uint32_t), &shadowDebugMode);
+
+                // Push shadow enable flag (offset 36, size 4)
+                uint32_t enableShadows = m_EnableShadows ? 1u : 0u;
+
+                // Debug: Log shadow enable state on first frame
+                static bool loggedShadowState = false;
+                if (!loggedShadowState) {
+                    METAGFX_INFO << "Shadow enable flag being pushed to shader: " << enableShadows;
+                    loggedShadowState = true;
+                }
+
+                vkCmd->PushConstants(vkPipeline->GetLayout(),
+                                    VK_SHADER_STAGE_FRAGMENT_BIT,
+                                    36, sizeof(uint32_t), &enableShadows);
+
                 // Bind and draw
+                cmd->BindVertexBuffer(mesh->GetVertexBuffer());
+                cmd->BindIndexBuffer(mesh->GetIndexBuffer());
+                cmd->DrawIndexed(mesh->GetIndexCount());
+            }
+        }
+    }
+
+    // Render ground plane with simple grey material (if enabled)
+    if (m_ShowGroundPlane && m_GroundPlane && m_GroundPlane->IsValid()) {
+        // Create a simple grey material for the ground
+        // Use darker grey to make shadows more visible
+        MaterialProperties groundMat{};
+        groundMat.albedo = glm::vec3(0.35f, 0.35f, 0.35f);  // Dark grey (reduced from 0.5)
+        groundMat.roughness = 0.9f;  // Very rough (increased from 0.8)
+        groundMat.metallic = 0.0f;   // Not metallic
+        groundMat.emissiveFactor = glm::vec3(0.0f);
+        m_GroundPlaneMaterialBuffer->CopyData(&groundMat, sizeof(groundMat));
+
+        // DO NOT call UpdateTexture here! The ground plane descriptor set was initialized
+        // with default textures during setup, and calling UpdateTexture during rendering
+        // causes issues. Just bind the pre-configured descriptor set.
+
+        // Bind ground plane's dedicated descriptor set (use current frame for double buffering)
+        auto vkCmd = std::static_pointer_cast<VulkanCommandBuffer>(cmd);
+        auto vkPipeline = std::static_pointer_cast<VulkanPipeline>(m_ModelPipeline);
+        vkCmd->BindDescriptorSet(vkPipeline->GetLayout(), m_GroundPlaneDescriptorSet->GetSet(m_CurrentFrame));
+
+        // Push material flags (no textures)
+        uint32_t flags = 0;
+        vkCmd->PushConstants(vkPipeline->GetLayout(), VK_SHADER_STAGE_FRAGMENT_BIT, 16, sizeof(uint32_t), &flags);
+
+        // Draw ground plane
+        for (const auto& mesh : m_GroundPlane->GetMeshes()) {
+            if (mesh && mesh->IsValid()) {
                 cmd->BindVertexBuffer(mesh->GetVertexBuffer());
                 cmd->BindIndexBuffer(mesh->GetIndexBuffer());
                 cmd->DrawIndexed(mesh->GetIndexCount());
@@ -1188,10 +1634,15 @@ void Application::Shutdown() {
         m_Model->Cleanup();
         m_Model.reset();
     }
+    if (m_GroundPlane) {
+        m_GroundPlane->Cleanup();
+        m_GroundPlane.reset();
+    }
 
     // Clean up pipelines
     m_ModelPipeline.reset();
     m_SkyboxPipeline.reset();
+    m_ShadowPipeline.reset();
     m_Pipeline.reset();
 
     // Clean up buffers
@@ -1202,10 +1653,14 @@ void Application::Shutdown() {
     m_UniformBuffers[1].reset();
     m_MaterialBuffers[0].reset();
     m_MaterialBuffers[1].reset();
+    m_GroundPlaneMaterialBuffer.reset();
+    m_ShadowUniformBuffer.reset();
 
     // Clean up descriptor sets
     m_DescriptorSet.reset();
     m_SkyboxDescriptorSet.reset();
+    m_ShadowDescriptorSet.reset();
+    m_GroundPlaneDescriptorSet.reset();
 
     // Clean up textures (must be before device destruction)
     m_DefaultTexture.reset();
@@ -1223,6 +1678,9 @@ void Application::Shutdown() {
     // Clean up samplers
     m_LinearRepeatSampler.reset();
     m_CubemapSampler.reset();
+
+    // Clean up shadow map
+    m_ShadowMap.reset();
 
     // Finally destroy the device
     m_Device.reset();
@@ -1410,7 +1868,7 @@ void Application::RenderImGui(Ref<rhi::CommandBuffer> cmd, Ref<rhi::Texture> bac
 
     // Define UI
     // METAGFX_INFO << "RenderImGui: Creating UI";
-    ImGui::SetNextWindowSize(ImVec2(350, 400), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(350, 550), ImGuiCond_FirstUseEver);
     ImGui::Begin("MetaGFX Controls");
 
     ImGui::Text("Rendering Controls");
@@ -1474,6 +1932,76 @@ void Application::RenderImGui(Ref<rhi::CommandBuffer> cmd, Ref<rhi::Texture> bac
     } else {
         ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.0f, 1.0f), "Status: Hidden");
         ImGui::Text("Using solid color background");
+    }
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Text("Shadow Mapping");
+    ImGui::Separator();
+
+    // Shadow toggle
+    if (ImGui::Checkbox("Enable Shadows", &m_EnableShadows)) {
+        METAGFX_INFO << "Shadow enabled state changed to: " << (m_EnableShadows ? "ENABLED" : "DISABLED");
+    }
+
+    // Ground plane toggle
+    ImGui::Checkbox("Show Ground Plane", &m_ShowGroundPlane);
+
+    // Shadow controls (only show when shadows are enabled)
+    if (m_EnableShadows) {
+        // Shadow bias slider
+        if (ImGui::SliderFloat("Shadow Bias", &m_ShadowBias, 0.0f, 0.01f, "%.5f")) {
+            // Shadow bias will be updated in the next frame's render pass
+        }
+
+        // Light direction controls
+        ImGui::Text("Light Direction:");
+        ImGui::SliderFloat("Light X", &m_LightDirection.x, -2.0f, 2.0f);
+        ImGui::SliderFloat("Light Y", &m_LightDirection.y, -2.0f, 2.0f);
+        ImGui::SliderFloat("Light Z", &m_LightDirection.z, -2.0f, 2.0f);
+        if (ImGui::Button("Reset Light Direction")) {
+            m_LightDirection = glm::vec3(0.5f, -1.0f, -0.3f);
+        }
+
+        // Shadow debug mode selector
+        const char* debugModes[] = {
+            "Off",
+            "Shadow Factor",
+            "Normals",
+            "Depth & Factor",
+            "Depth Color",
+            "Shadow Grayscale",
+            "Depth vs Sample"
+        };
+        if (ImGui::Combo("Debug Mode", &m_ShadowDebugMode, debugModes, 7)) {
+            m_VisualizeShadowMap = (m_ShadowDebugMode > 0);
+        }
+
+        if (m_ShadowDebugMode == 1) {
+            ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f), "  White = lit, Black = shadowed");
+        } else if (m_ShadowDebugMode == 2) {
+            ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f), "  RGB = vertex normals");
+        } else if (m_ShadowDebugMode == 3) {
+            ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f), "  Split: world pos | light space pos");
+        } else if (m_ShadowDebugMode == 4) {
+            ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f), "  RGB = proj XY + depth");
+        } else if (m_ShadowDebugMode == 5) {
+            ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f), "  Grayscale shadow factor");
+        } else if (m_ShadowDebugMode == 6) {
+            ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f), "  R = depth, G = comparison result");
+        }
+
+        ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "Status: Active");
+        if (m_ShadowMap) {
+            ImGui::Text("Shadow Map: %ux%u", m_ShadowMap->GetWidth(), m_ShadowMap->GetHeight());
+            ImGui::Text("Using PCF (3x3 kernel)");
+        }
+
+        ImGui::Spacing();
+        ImGui::Text("Tip: Adjust bias to reduce acne");
+    } else {
+        ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.0f, 1.0f), "Status: Disabled");
+        ImGui::Text("No shadow rendering");
     }
 
     // Demo window toggle

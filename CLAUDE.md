@@ -6,7 +6,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 MetaGFX is a backend-agnostic physically-based renderer implementing a common abstract core with multiple graphics API backends (Vulkan, Direct3D 12, Metal, WebGPU). The project is organized around a phased roadmap with milestones tracked in `claude/metagfx_roadmap.md`.
 
-**Current Status**: Milestone 3.2 completed (PBR - Physically Based Rendering). The renderer can load 3D models from various file formats (OBJ, FBX, glTF, COLLADA), render them with materials (albedo, roughness, metallic, emissive), Cook-Torrace BRDF, and albedo texture maps.
+**Current Status**: Milestone 3.3 completed (Shadow Mapping). The renderer supports:
+- Physically-Based Rendering (PBR) with Cook-Torrance BRDF
+- Real-time shadow mapping with PCF filtering from directional lights
+- Model loading from various formats (OBJ, FBX, glTF, COLLADA)
+- Full material system (albedo, roughness, metallic, emissive, normal maps)
+- Image-Based Lighting (IBL) with environment maps
+- Interactive shadow controls (bias, light direction)
 
 ## Build Commands
 
@@ -73,8 +79,9 @@ The compiled shaders (`.spv.inl` files) are included directly in the C++ source.
 
 **Available Shaders**:
 - `triangle.vert/frag` - Simple vertex color rendering
-- `model.vert/frag` - Full vertex layout with normals and UVs, with PBR lighting
+- `model.vert/frag` - Full vertex layout with normals and UVs, with PBR lighting and shadows
 - `skybox.vert/frag` - Skybox rendering
+- `shadowmap.vert/frag` - Shadow map depth-only rendering (fragment shader is empty)
 
 ## Architecture
 
@@ -306,6 +313,7 @@ Key documentation files:
 - `docs/textures_and_samplers.md` - Texture loading, sampling, and material integration
 - `docs/light_system.md` - Light system design and implementation
 - `docs/pbr_rendering.md` - PBR rendering with Cook-Torrance BRDF
+- `docs/shadow_mapping.md` - Shadow mapping with PCF, Vulkan depth convention, ground plane shadows
 - `docs/resource_management.md` - GPU resource lifetimes and deferred deletion
 - `docs/imgui_integration.md` - ImGui GUI system integration and usage
 - `claude/metagfx_roadmap.md` - Full implementation roadmap (10 phases, 30+ milestones)

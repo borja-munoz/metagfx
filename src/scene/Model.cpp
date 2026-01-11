@@ -572,6 +572,12 @@ void Model::Cleanup() {
     m_FilePath.clear();
 }
 
+void Model::AddMesh(std::unique_ptr<Mesh> mesh) {
+    if (mesh) {
+        m_Meshes.push_back(std::move(mesh));
+    }
+}
+
 bool Model::GetBoundingBox(glm::vec3& outMin, glm::vec3& outMax) const {
     if (m_Meshes.empty()) {
         return false;

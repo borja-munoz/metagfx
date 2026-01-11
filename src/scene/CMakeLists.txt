@@ -8,6 +8,7 @@ set(SCENE_SOURCES
     Mesh.cpp
     Model.cpp
     Scene.cpp
+    ShadowMap.cpp
 )
 
 set(SCENE_HEADERS
@@ -17,6 +18,7 @@ set(SCENE_HEADERS
     ${CMAKE_SOURCE_DIR}/include/metagfx/scene/Mesh.h
     ${CMAKE_SOURCE_DIR}/include/metagfx/scene/Model.h
     ${CMAKE_SOURCE_DIR}/include/metagfx/scene/Scene.h
+    ${CMAKE_SOURCE_DIR}/include/metagfx/scene/ShadowMap.h
 )
 
 add_library(metagfx_scene STATIC ${SCENE_SOURCES} ${SCENE_HEADERS})

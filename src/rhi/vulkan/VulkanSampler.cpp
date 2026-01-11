@@ -27,6 +27,21 @@ static VkSamplerAddressMode ToVkSamplerAddressMode(SamplerAddressMode mode) {
     return VK_SAMPLER_ADDRESS_MODE_REPEAT;
 }
 
+// Helper to convert CompareOp enum to VkCompareOp
+static VkCompareOp ToVkCompareOp(CompareOp op) {
+    switch (op) {
+        case CompareOp::Never:          return VK_COMPARE_OP_NEVER;
+        case CompareOp::Less:           return VK_COMPARE_OP_LESS;
+        case CompareOp::Equal:          return VK_COMPARE_OP_EQUAL;
+        case CompareOp::LessOrEqual:    return VK_COMPARE_OP_LESS_OR_EQUAL;
+        case CompareOp::Greater:        return VK_COMPARE_OP_GREATER;
+        case CompareOp::NotEqual:       return VK_COMPARE_OP_NOT_EQUAL;
+        case CompareOp::GreaterOrEqual: return VK_COMPARE_OP_GREATER_OR_EQUAL;
+        case CompareOp::Always:         return VK_COMPARE_OP_ALWAYS;
+    }
+    return VK_COMPARE_OP_ALWAYS;
+}
+
 VulkanSampler::VulkanSampler(VulkanContext& context, const SamplerDesc& desc)
     : m_Context(context) {
 
@@ -49,8 +64,9 @@ VulkanSampler::VulkanSampler(VulkanContext& context, const SamplerDesc& desc)
     samplerInfo.anisotropyEnable = desc.anisotropyEnable ? VK_TRUE : VK_FALSE;
     samplerInfo.maxAnisotropy = desc.maxAnisotropy;
 
-    samplerInfo.compareEnable = VK_FALSE;
-    samplerInfo.compareOp = VK_COMPARE_OP_ALWAYS;
+    // Comparison sampler for shadow mapping
+    samplerInfo.compareEnable = desc.enableCompare ? VK_TRUE : VK_FALSE;
+    samplerInfo.compareOp = ToVkCompareOp(desc.compareOp);
 
     samplerInfo.borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK;
     samplerInfo.unnormalizedCoordinates = VK_FALSE;
