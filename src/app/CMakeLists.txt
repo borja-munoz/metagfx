@@ -17,6 +17,11 @@ target_include_directories(metagfx
         ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
+# Add metal-cpp include path if Metal is enabled
+if(METAGFX_USE_METAL)
+    target_include_directories(metagfx PRIVATE ${CMAKE_SOURCE_DIR}/external/metal-cpp)
+endif()
+
 target_link_libraries(metagfx
     PRIVATE
         metagfx_renderer

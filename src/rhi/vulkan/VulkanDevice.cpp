@@ -11,6 +11,7 @@
 #include "metagfx/rhi/vulkan/VulkanPipeline.h"
 #include "metagfx/rhi/vulkan/VulkanCommandBuffer.h"
 #include "metagfx/rhi/vulkan/VulkanFramebuffer.h"
+#include "metagfx/rhi/vulkan/VulkanDescriptorSet.h"
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_vulkan.h>
@@ -213,6 +214,17 @@ Ref<Sampler> VulkanDevice::CreateSampler(const SamplerDesc& desc) {
 
 Ref<Framebuffer> VulkanDevice::CreateFramebuffer(const FramebufferDesc& desc) {
     return CreateRef<VulkanFramebuffer>(m_Context.device, desc);
+}
+
+Ref<DescriptorSet> VulkanDevice::CreateDescriptorSet(const DescriptorSetDesc& desc) {
+    return CreateRef<VulkanDescriptorSet>(m_Context, desc);
+}
+
+void VulkanDevice::SetActiveDescriptorSetLayout(Ref<DescriptorSet> descriptorSet) {
+    if (descriptorSet) {
+        VkDescriptorSetLayout layout = static_cast<VkDescriptorSetLayout>(descriptorSet->GetNativeLayout());
+        SetDescriptorSetLayout(layout);
+    }
 }
 
 Ref<Shader> VulkanDevice::CreateShader(const ShaderDesc& desc) {

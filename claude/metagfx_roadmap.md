@@ -234,28 +234,19 @@ Define abstract interfaces for:
 
 ## PHASE 4: Multi-API and Optimizations
 
-### Milestone 4.1: Direct3D 12 Implementation
-**Goal**: Second graphics backend
-
-- Implement RHI for D3D12
-- Verify that entire renderer core works unchanged
-- API selection system at compile/runtime
-
-**Deliverable**: Renderer working with D3D12 on Windows
-
----
-
-### Milestone 4.2: Metal Implementation
+### Milestone 4.1: Metal Implementation
 **Goal**: macOS/iOS support
 
 - Implement RHI for Metal
 - Platform-specific adaptations
+- Verify that entire renderer core works unchanged
+- API selection system at compile/runtime
 
 **Deliverable**: Renderer working with Metal on macOS
 
 ---
 
-### Milestone 4.3: WebGPU Implementation
+### Milestone 4.2: WebGPU Implementation
 **Goal**: Web and portability support
 
 - Implement RHI for WebGPU (dawn or wgpu)
@@ -265,7 +256,7 @@ Define abstract interfaces for:
 
 ---
 
-### Milestone 4.4: Rendering Optimizations
+### Milestone 4.3: Rendering Optimizations
 **Goal**: Improve performance
 
 - Frustum culling
@@ -332,7 +323,6 @@ Define abstract interfaces for:
 
 - **GPU Acceleration Structure Implementation**:
   - **Vulkan**: VK_KHR_acceleration_structure + VK_KHR_ray_query
-  - **D3D12**: DXR (DirectX Raytracing) BLAS/TLAS
   - **Metal**: Metal Ray Tracing acceleration structures
   - Automatic conversion from CPU BVH to hardware AS
 
@@ -349,7 +339,9 @@ Define abstract interfaces for:
   - Shader binding table (SBT) management
   - RT pipeline state objects
 
-**Deliverable**: Hardware-accelerated ray tracing pipeline working across Vulkan/D3D12/Metal
+**Deliverable**: Hardware-accelerated ray tracing pipeline working across Vulkan/Metal
+
+**Note**: D3D12/DXR ray tracing support is implemented in Phase 8 (Milestone 8.2)
 
 ---
 
@@ -483,9 +475,35 @@ Define abstract interfaces for:
 
 ---
 
-## PHASE 8: Advanced Techniques
+## PHASE 8: Direct3D 12 Backend
 
-### Milestone 8.1: Photon Mapping
+### Milestone 8.1: Direct3D 12 Implementation
+**Goal**: Windows graphics backend
+
+- Implement RHI for D3D12
+- Verify that entire renderer core works unchanged
+- D3D12 memory management (D3D12MA)
+- Resource state tracking and barriers
+
+**Deliverable**: Renderer working with D3D12 on Windows
+
+---
+
+### Milestone 8.2: DXR Ray Tracing Support
+**Goal**: DirectX Raytracing integration
+
+- DXR acceleration structures (BLAS/TLAS)
+- Ray tracing pipeline state objects
+- Shader binding tables
+- Integration with hybrid and path tracing modes
+
+**Deliverable**: Ray tracing support on D3D12/DXR
+
+---
+
+## PHASE 9: Advanced Techniques
+
+### Milestone 9.1: Photon Mapping
 **Goal**: Two-pass algorithm for caustics
 
 - Photon emission from lights
@@ -498,7 +516,7 @@ Define abstract interfaces for:
 
 ---
 
-### Milestone 8.2: Bidirectional Path Tracing
+### Milestone 9.2: Bidirectional Path Tracing
 **Goal**: Improve convergence in difficult scenes
 
 - Light paths and eye paths
@@ -509,7 +527,7 @@ Define abstract interfaces for:
 
 ---
 
-### Milestone 8.3: Volumetric Rendering
+### Milestone 9.3: Volumetric Rendering
 **Goal**: Participating media
 
 - Scattering and absorption
@@ -521,9 +539,9 @@ Define abstract interfaces for:
 
 ---
 
-## PHASE 9: Production Features
+## PHASE 10: Production Features
 
-### Milestone 9.1: Complete Asset System
+### Milestone 10.1: Complete Asset System
 **Goal**: Robust content pipeline
 
 - Centralized asset manager
@@ -536,7 +554,7 @@ Define abstract interfaces for:
 
 ---
 
-### Milestone 9.2: Denoising
+### Milestone 10.2: Denoising
 **Goal**: Reduce noise in offline renders
 
 - Integrate Intel Open Image Denoise or OptiX Denoiser
@@ -547,7 +565,7 @@ Define abstract interfaces for:
 
 ---
 
-### Milestone 9.3: Offline Rendering System
+### Milestone 10.3: Offline Rendering System
 **Goal**: High-quality rendering
 
 - Progressive rendering
@@ -560,7 +578,7 @@ Define abstract interfaces for:
 
 ---
 
-### Milestone 9.4: Interactive Editor/Viewer
+### Milestone 10.4: Interactive Editor/Viewer
 **Goal**: Interface for working with scenes
 
 - UI with ImGui
@@ -573,9 +591,9 @@ Define abstract interfaces for:
 
 ---
 
-## PHASE 10: Final Optimization and Polish
+## PHASE 11: Final Optimization and Polish
 
-### Milestone 10.1: Profiling and Optimization
+### Milestone 11.1: Profiling and Optimization
 - GPU profiling (NSight, RenderDoc, PIX)
 - CPU profiling
 - Memory profiling
@@ -584,7 +602,7 @@ Define abstract interfaces for:
 
 ---
 
-### Milestone 10.2: Testing and Validation
+### Milestone 11.2: Testing and Validation
 - Unit tests for critical components
 - Visual regression tests
 - Validation against reference renders (PBRT)
@@ -592,7 +610,7 @@ Define abstract interfaces for:
 
 ---
 
-### Milestone 10.3: Documentation
+### Milestone 11.3: Documentation
 - Architecture documentation
 - API reference
 - User guide
@@ -692,14 +710,14 @@ This means:
 - Camera system, mesh loading, materials, textures
 - **Current Status**: All milestones complete
 
-### Phase 3: Rasterization Mode (Milestones 3.1-3.3)
+### Phase 3: Rasterization Mode (Milestones 3.1-3.3) ✅ COMPLETED
 - Light system (point, directional, spot)
 - PBR rendering with Cook-Torrance BRDF
 - **Shadow mapping** with PCF filtering
 - **Deliverable**: Full rasterization renderer (60-144 FPS)
 
-### Phase 4: Multi-API Support (Milestones 4.1-4.4)
-- D3D12, Metal, WebGPU backends
+### Phase 4: Multi-API Support (Milestones 4.1-4.3)
+- Metal, WebGPU backends
 - Rendering optimizations (culling, LOD, instancing)
 - Cross-platform validation
 
@@ -710,7 +728,7 @@ This means:
 
 ### Phase 6: Hybrid Mode (Milestones 6.1-6.3)
 - CPU BVH and GPU acceleration structures
-- Hardware ray tracing pipeline (Vulkan/DXR/Metal RT)
+- Hardware ray tracing pipeline (Vulkan/Metal RT)
 - **Ray traced shadows** in hybrid renderer
 - **Deliverable**: Hybrid rasterization + RT (30-60 FPS)
 
@@ -720,9 +738,14 @@ This means:
 - **GPU-accelerated path tracing**
 - **Deliverable**: Full path tracer (1-30 FPS progressive)
 
-### Phase 8-10: Advanced Features
-- Photon mapping, bidirectional path tracing
-- Volumetric rendering
-- Production pipeline (asset management, denoising, editor)
+### Phase 8: Direct3D 12 Backend (Milestones 8.1-8.2)
+- D3D12 rasterization backend
+- DXR ray tracing support
+- Windows platform support
 
-**Current Focus**: Milestone 3.3 - Shadow Mapping (Rasterization Mode)
+### Phase 9-11: Advanced Features
+- Photon mapping, bidirectional path tracing, volumetric rendering
+- Production pipeline (asset management, denoising, editor)
+- Final optimization and documentation
+
+**Current Focus**: Milestone 4.1 - Metal Implementation

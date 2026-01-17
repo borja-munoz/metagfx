@@ -37,18 +37,21 @@ public:
     
     void CopyBuffer(Ref<Buffer> src, Ref<Buffer> dst,
                    uint64 size, uint64 srcOffset = 0, uint64 dstOffset = 0) override;
-    
+
+    // Abstract interface implementations
+    void BindDescriptorSet(Ref<Pipeline> pipeline, Ref<DescriptorSet> descriptorSet,
+                           uint32 frameIndex = 0) override;
+    void PushConstants(Ref<Pipeline> pipeline, ShaderStage stages,
+                       uint32 offset, uint32 size, const void* data) override;
+    void BufferMemoryBarrier(Ref<Buffer> buffer) override;
+
     // Vulkan-specific
     VkCommandBuffer GetHandle() const { return m_CommandBuffer; }
 
-    // Bind descriptor set
+    // Vulkan-specific overloads (for backward compatibility)
     void BindDescriptorSet(VkPipelineLayout layout, VkDescriptorSet descriptorSet);
-
-    // Push constants
     void PushConstants(VkPipelineLayout layout, VkShaderStageFlags stageFlags,
                       uint32 offset, uint32 size, const void* data);
-
-    // Pipeline barrier for buffer memory synchronization
     void BufferMemoryBarrier(VkBuffer buffer, VkDeviceSize offset, VkDeviceSize size,
                             VkPipelineStageFlags srcStage, VkPipelineStageFlags dstStage,
                             VkAccessFlags srcAccess, VkAccessFlags dstAccess);

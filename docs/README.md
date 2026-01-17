@@ -44,6 +44,23 @@ Details of the Vulkan backend implementation:
 
 ---
 
+#### [Metal Implementation](metal.md)
+**Topics**: Metal backend with metal-cpp
+
+Comprehensive Metal backend implementation guide:
+- metal-cpp integration and type mappings
+- Pure C++ implementation (no Objective-C)
+- Shader compilation (SPIR-V → MSL with SPIRV-Cross)
+- Push constants emulation with `setBytes`
+- Coordinate system differences (Y-flip handling)
+- SDL3 integration and bridging
+- ImGui Metal C++ backend integration
+- Memory management and performance considerations
+- Debugging with Xcode Metal Frame Debugger
+- Full feature parity with Vulkan backend
+
+---
+
 ### Feature Documentation
 
 #### [Camera and Transformation System](camera_transformation_system.md)
@@ -278,33 +295,40 @@ cd bin
 ```
 
 ### Project Status
-**Current Milestone**: 3.2 (PBR - Physically Based Rendering) ✅ Phases 1, 2, 4 Complete
+**Current Milestone**: 4.1 (Metal Backend Implementation) ✅ Complete
 **Implemented Features**:
-- ✅ Vulkan backend
-- ✅ Camera system with FPS controls
+- ✅ **Vulkan backend** (Windows, Linux, macOS)
+- ✅ **Metal backend** (macOS, iOS-ready) - **NEW**
+- ✅ Camera system with FPS controls and orbital mode
 - ✅ Model loading (OBJ, FBX, glTF, COLLADA)
 - ✅ Runtime model switching with deferred deletion
-- ✅ Procedural geometry (cube, sphere)
-- ✅ Material system (albedo, roughness, metallic, AO)
+- ✅ Procedural geometry (cube, sphere, ground plane)
+- ✅ Material system (albedo, roughness, metallic, AO, emissive)
 - ✅ PBR rendering with Cook-Torrance BRDF
+- ✅ Image-Based Lighting (IBL) with environment maps
 - ✅ Normal mapping with derivative-based TBN
 - ✅ ACES filmic tone mapping and exposure control
-- ✅ Texture system (albedo, normal, metallic-roughness, AO)
+- ✅ Texture system (albedo, normal, metallic-roughness, AO, emissive)
 - ✅ Light system (directional, point, spot lights - up to 16 lights)
+- ✅ Shadow mapping with PCF filtering
+- ✅ Skybox rendering with LOD control
+- ✅ ImGui integration (Vulkan + Metal backends)
 
 **Next Milestones**:
-- 3.2 Phase 3: IBL (Image-Based Lighting)
-- 3.3: Shadow Mapping
-- 4.1: Direct3D 12 Implementation
+- 4.2: WebGPU Implementation (cross-platform, web)
+- 4.3: Rendering Optimizations (frustum culling, LOD, instancing)
+- 5.1: PBRT Scene Parser
+- 8.1: Direct3D 12 Implementation (Windows) - Postponed to Phase 8
 
 ### Key Files
 | File | Purpose |
 |------|---------|
 | `include/metagfx/rhi/*.h` | RHI abstract interfaces |
 | `src/rhi/vulkan/*.cpp` | Vulkan backend implementation |
+| `src/rhi/metal/*.cpp` | Metal backend implementation |
 | `include/metagfx/scene/*.h` | Scene management (Camera, Mesh, Model) |
 | `src/app/Application.cpp` | Main application and rendering loop |
-| `src/app/*.vert`, `*.frag` | GLSL shaders |
+| `src/app/*.vert`, `*.frag` | GLSL shaders (compiled to SPIR-V) |
 
 ### External Dependencies
 - **SDL3**: Window management and input
@@ -329,13 +353,16 @@ cd bin
 ### Documentation TODO
 
 Future documentation needs:
-- [ ] D3D12 implementation guide (when implemented)
-- [ ] Metal implementation guide (when implemented)
-- [ ] WebGPU implementation guide (when implemented)
-- [x] Texture system design (Milestone 2.3) ✅ Complete
-- [ ] Lighting system design (Phase 3)
-- [ ] Performance optimization guide
-- [ ] Debugging and profiling guide
+- [x] Metal implementation guide ✅ Complete (Milestone 4.1)
+- [ ] WebGPU implementation guide (Milestone 4.2 - next priority)
+- [ ] Rendering optimizations guide (Milestone 4.3)
+- [ ] D3D12 implementation guide (Milestone 8.1 - postponed to Phase 8)
+- [x] Texture system design ✅ Complete (Milestone 2.3)
+- [x] Lighting system design ✅ Complete (Milestone 3.1)
+- [x] PBR rendering guide ✅ Complete (Milestone 3.2)
+- [x] Shadow mapping guide ✅ Complete (Milestone 3.3)
+- [ ] PBRT scene parser guide (Phase 5)
+- [ ] Performance profiling guide
 - [ ] Testing strategy and framework
 
 ---

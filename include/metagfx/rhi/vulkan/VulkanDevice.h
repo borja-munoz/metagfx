@@ -24,7 +24,8 @@ public:
     Ref<Shader> CreateShader(const ShaderDesc& desc) override;
     Ref<Pipeline> CreateGraphicsPipeline(const PipelineDesc& desc) override;
     Ref<Framebuffer> CreateFramebuffer(const FramebufferDesc& desc) override;
-    
+    Ref<DescriptorSet> CreateDescriptorSet(const DescriptorSetDesc& desc) override;
+
     Ref<CommandBuffer> CreateCommandBuffer() override;
     void SubmitCommandBuffer(Ref<CommandBuffer> commandBuffer) override;
     
@@ -36,7 +37,10 @@ public:
     VulkanContext& GetContext() { return m_Context; }
     uint32 FindMemoryType(uint32 typeFilter, VkMemoryPropertyFlags properties);
 
-    // Descriptor set layout management
+    // Descriptor set layout management (abstract interface)
+    void SetActiveDescriptorSetLayout(Ref<DescriptorSet> descriptorSet) override;
+
+    // Vulkan-specific descriptor set layout access
     void SetDescriptorSetLayout(VkDescriptorSetLayout layout) { m_DescriptorSetLayout = layout; }
     VkDescriptorSetLayout GetDescriptorSetLayout() const { return m_DescriptorSetLayout; }
 

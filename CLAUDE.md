@@ -6,13 +6,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 MetaGFX is a backend-agnostic physically-based renderer implementing a common abstract core with multiple graphics API backends (Vulkan, Direct3D 12, Metal, WebGPU). The project is organized around a phased roadmap with milestones tracked in `claude/metagfx_roadmap.md`.
 
-**Current Status**: Milestone 3.3 completed (Shadow Mapping). The renderer supports:
+**Current Status**: Milestone 4.1 completed (Metal Backend Implementation). The renderer supports:
+- **Multi-Backend Rendering**: Vulkan (Windows, Linux, macOS) and Metal (macOS)
 - Physically-Based Rendering (PBR) with Cook-Torrance BRDF
 - Real-time shadow mapping with PCF filtering from directional lights
 - Model loading from various formats (OBJ, FBX, glTF, COLLADA)
 - Full material system (albedo, roughness, metallic, emissive, normal maps)
 - Image-Based Lighting (IBL) with environment maps
-- Interactive shadow controls (bias, light direction)
+- Skybox rendering with LOD control
+- Interactive UI controls (ImGui on both Vulkan and Metal)
 
 ## Build Commands
 
@@ -52,12 +54,14 @@ metagfx.exe  # Windows
 ### CMake Build Options
 
 ```bash
-cmake .. -DMETAGFX_USE_VULKAN=ON      # Enable Vulkan (default: ON)
-cmake .. -DMETAGFX_USE_D3D12=ON       # Enable D3D12 (default: OFF)
-cmake .. -DMETAGFX_USE_METAL=ON       # Enable Metal (default: OFF)
-cmake .. -DMETAGFX_USE_WEBGPU=ON      # Enable WebGPU (default: OFF)
+cmake .. -DMETAGFX_USE_VULKAN=ON      # Enable Vulkan (default: ON) ✅ Fully supported
+cmake .. -DMETAGFX_USE_METAL=ON       # Enable Metal (default: OFF) ✅ Fully supported
+cmake .. -DMETAGFX_USE_D3D12=ON       # Enable D3D12 (default: OFF) - Planned
+cmake .. -DMETAGFX_USE_WEBGPU=ON      # Enable WebGPU (default: OFF) - Planned
 cmake .. -DMETAGFX_BUILD_TESTS=ON     # Build tests (default: OFF)
 ```
+
+**Backend Selection**: On macOS, you can build with both Vulkan and Metal backends enabled. The backend is selected at device creation time in the application code.
 
 ### Shader Compilation
 
@@ -124,20 +128,19 @@ The RHI is the core abstraction that enables multi-backend support. Key principl
 - `Pipeline` - Graphics pipeline state objects
 - `Types.h` - Enums and structs (GraphicsAPI, BufferUsage, ShaderStage, Format, etc.)
 
-**Backend Implementations** (`src/rhi/vulkan/`, `include/metagfx/rhi/vulkan/`):
-- Currently only Vulkan is implemented (`VulkanDevice`, `VulkanSwapChain`, `VulkanBuffer`, etc.)
-- Each backend implements the abstract RHI interfaces
+**Backend Implementations**:
+- **Vulkan** (`src/rhi/vulkan/`, `include/metagfx/rhi/vulkan/`) ✅ Complete
+  - Full implementation: `VulkanDevice`, `VulkanSwapChain`, `VulkanBuffer`, etc.
+  - Platforms: Windows, Linux, macOS
+  - See [docs/vulkan.md](docs/vulkan.md) for details
+- **Metal** (`src/rhi/metal/`, `include/metagfx/rhi/metal/`) ✅ Complete
+  - Pure C++ using metal-cpp: `MetalDevice`, `MetalSwapChain`, `MetalBuffer`, etc.
+  - Platforms: macOS (iOS-ready)
+  - SPIR-V to MSL shader transpilation via SPIRV-Cross
+  - See [docs/metal.md](docs/metal.md) for details
 - Backend selection happens via factory function: `CreateGraphicsDevice(GraphicsAPI api, ...)`
 
-### Module Dependencies
-
-- **core**: Base types (`Ref<T>`, `Scope<T>`, `uint32`, etc.), logging, platform abstraction
-- **rhi**: Depends on core, provides graphics abstraction
-- **scene**: Depends on core + rhi, provides Camera, Mesh, Model, Scene graph
-- **renderer**: Depends on core + rhi + scene, high-level rendering
-- **app**: Depends on all modules, application entry point
-
-**External Dependencies**:
+### External Dependencies
 - **Assimp**: 3D model loading (OBJ, FBX, glTF, COLLADA importers enabled)
 - **GLM**: Mathematics library for vectors, matrices
 - **imgui**: User interface components
@@ -188,10 +191,9 @@ The codebase uses type aliases for smart pointers:
 1. Check the roadmap (`claude/metagfx_roadmap.md`) to understand the planned architecture
 2. Create an implementation plan for the next feature in the roadmap in the `claude`folder
 3. Confirm the implementation approach before proceeding with implementation
-2. If adding RHI functionality, define the abstract interface first in `include/metagfx/rhi/`
-3. Implement the Vulkan backend in `src/rhi/vulkan/`
-4. Update the corresponding CMakeLists.txt to include new source files
-5. When complete, document in `docs`, either updating existing docs or adding new ones if needed
+4. Implement the feature by adding/editing source files
+5. Update the corresponding CMakeLists.txt to include new source files
+6. When complete, document in `docs`, either updating existing docs or adding new ones if needed
 
 ### Working with Shaders
 
@@ -306,7 +308,10 @@ This prevents crashes from destroying resources while they're still referenced b
 
 Key documentation files:
 - `README.md` - Project overview, setup instructions, build commands
+- `docs/README.md` - Documentation index and organization
 - `docs/rhi.md` - RHI architecture and design principles
+- `docs/vulkan.md` - Vulkan backend implementation details
+- `docs/metal.md` - Metal backend implementation with metal-cpp (NEW)
 - `docs/camera_transformation_system.md` - Camera implementation details
 - `docs/model_loading.md` - Model loading system design (Mesh, Model, Assimp integration)
 - `docs/material_system.md` - Material system and Blinn-Phong lighting
@@ -331,13 +336,16 @@ Key documentation files:
 - **Includes**: Project headers use `"metagfx/..."`, external use `<...>`
 - **C++ Standard**: C++20 features are allowed
 
-## Future Backend Implementation
+## Backend Implementation Pattern
 
-When adding new graphics API backends (D3D12, Metal, WebGPU):
+The Metal backend (Milestone 4.1) validates the RHI's multi-API design. When adding future backends (D3D12, WebGPU):
 
 1. Create backend directory: `src/rhi/<api>/` and `include/metagfx/rhi/<api>/`
 2. Implement all RHI abstract interfaces for the new backend
 3. Update `src/rhi/GraphicsDevice.cpp` factory function to support new API
 4. Add CMake option and conditional compilation in `src/rhi/CMakeLists.txt`
-5. Test that the renderer core works without modification
-6. The RHI abstraction should hide all API-specific details from upper layers
+5. Handle shader compilation (SPIR-V → target shading language)
+6. Test that the renderer core works without modification
+7. Document backend-specific details in `docs/<api>.md`
+
+**Key Insight**: Both Vulkan and Metal backends share 100% of application-level code. The RHI successfully abstracts fundamental API differences, proving the design works.

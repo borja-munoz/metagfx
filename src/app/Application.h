@@ -7,12 +7,15 @@
 #include "metagfx/rhi/GraphicsDevice.h"
 #include "metagfx/rhi/Buffer.h"
 #include "metagfx/rhi/Pipeline.h"
+#include "metagfx/rhi/Types.h"
 #include "metagfx/scene/Camera.h"
 #include "metagfx/scene/Model.h"
 #include "metagfx/scene/Scene.h"
 #include <SDL3/SDL.h>
 #include <glm/glm.hpp>
+#ifdef METAGFX_USE_VULKAN
 #include <vulkan/vulkan.h>
+#endif
 #include <string>
 #include <vector>
 
@@ -25,7 +28,7 @@ namespace rhi {
     class Pipeline;
     class Texture;
     class Sampler;
-    class VulkanDescriptorSet;
+    class DescriptorSet;
 }
 
 class ShadowMap;
@@ -35,6 +38,7 @@ struct ApplicationConfig {
     uint32 width = 1280;
     uint32 height = 720;
     bool vsync = true;
+    rhi::GraphicsAPI graphicsAPI = rhi::GraphicsAPI::Vulkan;  // Default to Vulkan
 };
 
 class Application {
@@ -100,10 +104,10 @@ private:
     Ref<rhi::Buffer> m_MaterialBuffers[2];  // Double buffering for material
     Ref<rhi::Buffer> m_GroundPlaneMaterialBuffer;  // Dedicated material buffer for ground plane
     Ref<rhi::Buffer> m_ShadowUniformBuffer;  // Shadow UBO (light space matrix + bias)
-    std::unique_ptr<rhi::VulkanDescriptorSet> m_DescriptorSet;
-    std::unique_ptr<rhi::VulkanDescriptorSet> m_SkyboxDescriptorSet;  // Separate descriptor set for skybox
-    std::unique_ptr<rhi::VulkanDescriptorSet> m_ShadowDescriptorSet;  // Descriptor set for shadow pass
-    std::unique_ptr<rhi::VulkanDescriptorSet> m_GroundPlaneDescriptorSet;  // Separate descriptor set for ground plane
+    Ref<rhi::DescriptorSet> m_DescriptorSet;
+    Ref<rhi::DescriptorSet> m_SkyboxDescriptorSet;  // Separate descriptor set for skybox
+    Ref<rhi::DescriptorSet> m_ShadowDescriptorSet;  // Descriptor set for shadow pass
+    Ref<rhi::DescriptorSet> m_GroundPlaneDescriptorSet;  // Separate descriptor set for ground plane
     uint32 m_CurrentFrame = 0;
 
     // Texture resources

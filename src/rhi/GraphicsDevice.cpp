@@ -8,6 +8,10 @@
 #include "metagfx/rhi/vulkan/VulkanDevice.h"
 #endif
 
+#ifdef METAGFX_USE_METAL
+#include "metagfx/rhi/metal/MetalDevice.h"
+#endif
+
 namespace metagfx {
 namespace rhi {
 
@@ -27,8 +31,8 @@ Ref<GraphicsDevice> CreateGraphicsDevice(GraphicsAPI api, void* nativeWindowHand
 
 #ifdef METAGFX_USE_METAL
         case GraphicsAPI::Metal:
-            METAGFX_ERROR << "Metal not yet implemented (Milestone 4.2)";
-            return nullptr;
+            METAGFX_INFO << "Creating Metal graphics device...";
+            return CreateRef<MetalDevice>(static_cast<SDL_Window*>(nativeWindowHandle));
 #endif
 
 #ifdef METAGFX_USE_WEBGPU

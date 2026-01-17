@@ -6,6 +6,8 @@
 #include "metagfx/rhi/vulkan/VulkanTexture.h"
 #include "metagfx/rhi/vulkan/VulkanBuffer.h"
 #include "metagfx/rhi/vulkan/VulkanPipeline.h"
+#include "metagfx/rhi/vulkan/VulkanDescriptorSet.h"
+#include "metagfx/rhi/DescriptorSet.h"
 
 namespace metagfx {
 namespace rhi {
@@ -285,6 +287,43 @@ void VulkanCommandBuffer::BufferMemoryBarrier(VkBuffer buffer, VkDeviceSize offs
         0, nullptr,
         1, &barrier,
         0, nullptr
+    );
+}
+
+// Abstract interface implementations
+void VulkanCommandBuffer::BindDescriptorSet(Ref<Pipeline> pipeline, Ref<DescriptorSet> descriptorSet,
+                                            uint32 frameIndex) {
+    auto vkPipeline = std::static_pointer_cast<VulkanPipeline>(pipeline);
+    VkDescriptorSet vkDescSet = static_cast<VkDescriptorSet>(descriptorSet->GetNativeHandle(frameIndex));
+    BindDescriptorSet(vkPipeline->GetLayout(), vkDescSet);
+}
+
+void VulkanCommandBuffer::PushConstants(Ref<Pipeline> pipeline, ShaderStage stages,
+                                        uint32 offset, uint32 size, const void* data) {
+    auto vkPipeline = std::static_pointer_cast<VulkanPipeline>(pipeline);
+
+    // Convert ShaderStage to VkShaderStageFlags
+    VkShaderStageFlags vkStages = 0;
+    if (static_cast<int>(stages) & static_cast<int>(ShaderStage::Vertex))
+        vkStages |= VK_SHADER_STAGE_VERTEX_BIT;
+    if (static_cast<int>(stages) & static_cast<int>(ShaderStage::Fragment))
+        vkStages |= VK_SHADER_STAGE_FRAGMENT_BIT;
+    if (static_cast<int>(stages) & static_cast<int>(ShaderStage::Compute))
+        vkStages |= VK_SHADER_STAGE_COMPUTE_BIT;
+
+    PushConstants(vkPipeline->GetLayout(), vkStages, offset, size, data);
+}
+
+void VulkanCommandBuffer::BufferMemoryBarrier(Ref<Buffer> buffer) {
+    auto vkBuffer = std::static_pointer_cast<VulkanBuffer>(buffer);
+    BufferMemoryBarrier(
+        vkBuffer->GetHandle(),
+        0,
+        vkBuffer->GetSize(),
+        VK_PIPELINE_STAGE_HOST_BIT,
+        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+        VK_ACCESS_HOST_WRITE_BIT,
+        VK_ACCESS_UNIFORM_READ_BIT
     );
 }
 

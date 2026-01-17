@@ -9,6 +9,12 @@
 namespace metagfx {
 namespace rhi {
 
+// Forward declarations
+class Pipeline;
+class DescriptorSet;
+class Buffer;
+class Texture;
+
 class CommandBuffer {
 public:
     virtual ~CommandBuffer() = default;
@@ -44,7 +50,18 @@ public:
     // Copy commands
     virtual void CopyBuffer(Ref<Buffer> src, Ref<Buffer> dst,
                            uint64 size, uint64 srcOffset = 0, uint64 dstOffset = 0) = 0;
-    
+
+    // Descriptor set binding
+    virtual void BindDescriptorSet(Ref<Pipeline> pipeline, Ref<DescriptorSet> descriptorSet,
+                                   uint32 frameIndex = 0) = 0;
+
+    // Push constants (uniform data pushed directly without descriptor sets)
+    virtual void PushConstants(Ref<Pipeline> pipeline, ShaderStage stages,
+                               uint32 offset, uint32 size, const void* data) = 0;
+
+    // Memory barriers (for synchronization between CPU and GPU)
+    virtual void BufferMemoryBarrier(Ref<Buffer> buffer) = 0;
+
 protected:
     CommandBuffer() = default;
 };

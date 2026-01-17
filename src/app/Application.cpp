@@ -11,13 +11,21 @@
 #include "metagfx/rhi/Shader.h"
 #include "metagfx/rhi/SwapChain.h"
 #include "metagfx/rhi/Texture.h"
+#include "metagfx/rhi/Types.h"
+#ifdef METAGFX_USE_VULKAN
 #include "metagfx/rhi/vulkan/VulkanBuffer.h"
 #include "metagfx/rhi/vulkan/VulkanCommandBuffer.h"
 #include "metagfx/rhi/vulkan/VulkanDevice.h"
-#include "metagfx/rhi/vulkan/VulkanDescriptorSet.h"
+#include "metagfx/rhi/DescriptorSet.h"
 #include "metagfx/rhi/vulkan/VulkanPipeline.h"
 #include "metagfx/rhi/vulkan/VulkanSwapChain.h"
 #include "metagfx/rhi/vulkan/VulkanTexture.h"
+#endif
+#ifdef METAGFX_USE_METAL
+#include "metagfx/rhi/metal/MetalCommandBuffer.h"
+#include "metagfx/rhi/metal/MetalDevice.h"
+#include "metagfx/rhi/metal/MetalTexture.h"
+#endif
 #include "metagfx/scene/Camera.h"
 #include "metagfx/scene/Material.h"
 #include "metagfx/scene/Mesh.h"
@@ -27,7 +35,13 @@
 #include <glm/glm.hpp>
 #include <imgui.h>
 #include <imgui_impl_sdl3.h>
+#ifdef METAGFX_USE_VULKAN
 #include <imgui_impl_vulkan.h>
+#endif
+#ifdef METAGFX_USE_METAL
+#include <imgui_impl_metal.h>
+#endif
+#include <fstream>
 
 namespace metagfx {
 
@@ -51,21 +65,39 @@ void Application::Init() {
 
     METAGFX_INFO << "SDL initialized successfully";
 
-    // Create window
+    // Create window with appropriate flags for selected graphics API
     uint32_t windowFlags = SDL_WINDOW_RESIZABLE;
 
+    // Log requested backend
+    const char* apiName = "Unknown";
+    switch (m_Config.graphicsAPI) {
+        case rhi::GraphicsAPI::Vulkan: apiName = "Vulkan"; break;
+        case rhi::GraphicsAPI::Direct3D12: apiName = "D3D12"; break;
+        case rhi::GraphicsAPI::Metal: apiName = "Metal"; break;
+        case rhi::GraphicsAPI::WebGPU: apiName = "WebGPU"; break;
+    }
+    METAGFX_INFO << "Requested graphics API: " << apiName;
+
 #ifdef METAGFX_USE_VULKAN
-    windowFlags |= SDL_WINDOW_VULKAN;
-    METAGFX_INFO << "Creating window with Vulkan support";
+    if (m_Config.graphicsAPI == rhi::GraphicsAPI::Vulkan) {
+        windowFlags |= SDL_WINDOW_VULKAN;
+        METAGFX_INFO << "Creating window with Vulkan support";
+    }
 #endif
-    
+#ifdef METAGFX_USE_METAL
+    if (m_Config.graphicsAPI == rhi::GraphicsAPI::Metal) {
+        windowFlags |= SDL_WINDOW_METAL;
+        METAGFX_INFO << "Creating window with Metal support";
+    }
+#endif
+
     m_Window = SDL_CreateWindow(
         m_Config.title.c_str(),
         m_Config.width,
         m_Config.height,
         windowFlags
     );
-    
+
     if (!m_Window) {
         METAGFX_CRITICAL << "Failed to create window: " << SDL_GetError();
         SDL_Quit();
@@ -73,15 +105,15 @@ void Application::Init() {
     }
 
     METAGFX_INFO << "Window created: " << m_Config.width << "x" << m_Config.height;
-    
-    // Create graphics device
-#ifdef METAGFX_USE_VULKAN
-    m_Device = rhi::CreateGraphicsDevice(rhi::GraphicsAPI::Vulkan, m_Window);
+
+    // Create graphics device with configured API
+    m_Device = rhi::CreateGraphicsDevice(m_Config.graphicsAPI, m_Window);
     if (!m_Device) {
-        METAGFX_ERROR << "Failed to create graphics device";
+        METAGFX_ERROR << "Failed to create graphics device for " << apiName;
         return;
     }
-#endif
+
+    METAGFX_INFO << "Graphics device created: " << m_Device->GetDeviceInfo().deviceName;
 
     // Create camera
     m_Camera = std::make_unique<Camera>(
@@ -274,129 +306,35 @@ void Application::Init() {
     m_ShadowMap = std::make_unique<ShadowMap>(m_Device, 2048, 2048);
 
     // Create descriptor set with 14 bindings (added shadow map sampler and shadow UBO)
-    std::vector<rhi::DescriptorBinding> bindings = {
-        {
-            0,  // binding = 0 (MVP matrices)
-            VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-            VK_SHADER_STAGE_VERTEX_BIT,
-            m_UniformBuffers[0],
-            nullptr,  // texture
-            nullptr   // sampler
-        },
-        {
-            1,  // binding = 1 (Material properties)
-            VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-            VK_SHADER_STAGE_FRAGMENT_BIT,
-            m_MaterialBuffers[0],
-            nullptr,  // texture
-            nullptr   // sampler
-        },
-        {
-            2,  // binding = 2 (Albedo texture sampler)
-            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-            VK_SHADER_STAGE_FRAGMENT_BIT,
-            nullptr,  // buffer
-            m_DefaultTexture,
-            m_LinearRepeatSampler
-        },
-        {
-            3,  // binding = 3 (Light buffer) - CHANGED TO STORAGE BUFFER for MoltenVK compatibility
-            VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-            VK_SHADER_STAGE_FRAGMENT_BIT,
-            m_Scene->GetLightBuffer(),
-            nullptr,  // texture
-            nullptr   // sampler
-        },
-        {
-            4,  // binding = 4 (Normal map)
-            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-            VK_SHADER_STAGE_FRAGMENT_BIT,
-            nullptr,  // buffer
-            m_DefaultNormalMap,
-            m_LinearRepeatSampler
-        },
-        {
-            5,  // binding = 5 (Metallic map)
-            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-            VK_SHADER_STAGE_FRAGMENT_BIT,
-            nullptr,  // buffer
-            m_DefaultWhiteTexture,
-            m_LinearRepeatSampler
-        },
-        {
-            6,  // binding = 6 (Roughness map)
-            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-            VK_SHADER_STAGE_FRAGMENT_BIT,
-            nullptr,  // buffer
-            m_DefaultWhiteTexture,
-            m_LinearRepeatSampler
-        },
-        {
-            7,  // binding = 7 (AO map)
-            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-            VK_SHADER_STAGE_FRAGMENT_BIT,
-            nullptr,  // buffer
-            m_DefaultWhiteTexture,
-            m_LinearRepeatSampler
-        },
-        {
-            8,  // binding = 8 (Irradiance cubemap for diffuse IBL)
-            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-            VK_SHADER_STAGE_FRAGMENT_BIT,
-            nullptr,  // buffer
-            m_IrradianceMap,
-            m_CubemapSampler
-        },
-        {
-            9,  // binding = 9 (Prefiltered cubemap for specular IBL)
-            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-            VK_SHADER_STAGE_FRAGMENT_BIT,
-            nullptr,  // buffer
-            m_PrefilteredMap,
-            m_CubemapSampler
-        },
-        {
-            10,  // binding = 10 (BRDF LUT for split-sum approximation)
-            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-            VK_SHADER_STAGE_FRAGMENT_BIT,
-            nullptr,  // buffer
-            m_BRDF_LUT,
-            m_LinearRepeatSampler  // 2D texture, use regular sampler
-        },
-        {
-            11,  // binding = 11 (Emissive texture)
-            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-            VK_SHADER_STAGE_FRAGMENT_BIT,
-            nullptr,  // buffer
-            m_DefaultBlackTexture,  // Default: no emission
-            m_LinearRepeatSampler
-        },
-        {
-            12,  // binding = 12 (Shadow map sampler - comparison sampler)
-            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-            VK_SHADER_STAGE_FRAGMENT_BIT,
-            nullptr,  // buffer
-            m_ShadowMap->GetDepthTexture(),
-            m_ShadowMap->GetSampler()
-        },
-        {
-            13,  // binding = 13 (Shadow UBO - light space matrix + bias)
-            VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-            VK_SHADER_STAGE_FRAGMENT_BIT,
-            m_ShadowUniformBuffer,
-            nullptr,  // texture
-            nullptr   // sampler
-        }
+    using rhi::DescriptorType;
+    using rhi::ShaderStage;
+    using rhi::DescriptorBindingDesc;
+
+    std::vector<DescriptorBindingDesc> bindings = {
+        { 0, DescriptorType::UniformBuffer, ShaderStage::Vertex, m_UniformBuffers[0], nullptr, nullptr },  // MVP matrices
+        { 1, DescriptorType::UniformBuffer, ShaderStage::Fragment, m_MaterialBuffers[0], nullptr, nullptr },  // Material
+        { 2, DescriptorType::SampledTexture, ShaderStage::Fragment, nullptr, m_DefaultTexture, m_LinearRepeatSampler },  // Albedo
+        { 3, DescriptorType::StorageBuffer, ShaderStage::Fragment, m_Scene->GetLightBuffer(), nullptr, nullptr },  // Lights
+        { 4, DescriptorType::SampledTexture, ShaderStage::Fragment, nullptr, m_DefaultNormalMap, m_LinearRepeatSampler },  // Normal
+        { 5, DescriptorType::SampledTexture, ShaderStage::Fragment, nullptr, m_DefaultWhiteTexture, m_LinearRepeatSampler },  // Metallic
+        { 6, DescriptorType::SampledTexture, ShaderStage::Fragment, nullptr, m_DefaultWhiteTexture, m_LinearRepeatSampler },  // Roughness
+        { 7, DescriptorType::SampledTexture, ShaderStage::Fragment, nullptr, m_DefaultWhiteTexture, m_LinearRepeatSampler },  // AO
+        { 8, DescriptorType::SampledTexture, ShaderStage::Fragment, nullptr, m_IrradianceMap, m_CubemapSampler },  // Irradiance
+        { 9, DescriptorType::SampledTexture, ShaderStage::Fragment, nullptr, m_PrefilteredMap, m_CubemapSampler },  // Prefiltered
+        { 10, DescriptorType::SampledTexture, ShaderStage::Fragment, nullptr, m_BRDF_LUT, m_LinearRepeatSampler },  // BRDF LUT
+        { 11, DescriptorType::SampledTexture, ShaderStage::Fragment, nullptr, m_DefaultBlackTexture, m_LinearRepeatSampler },  // Emissive
+        { 12, DescriptorType::SampledTexture, ShaderStage::Fragment, nullptr, m_ShadowMap->GetDepthTexture(), m_ShadowMap->GetSampler() },  // Shadow map
+        { 13, DescriptorType::UniformBuffer, ShaderStage::Fragment, m_ShadowUniformBuffer, nullptr, nullptr }  // Shadow UBO
     };
 
-    m_DescriptorSet = std::make_unique<rhi::VulkanDescriptorSet>(
-        std::static_pointer_cast<rhi::VulkanDevice>(m_Device)->GetContext(),
-        bindings
-    );
+    rhi::DescriptorSetDesc descriptorSetDesc;
+    descriptorSetDesc.bindings = bindings;
+    descriptorSetDesc.debugName = "MainDescriptorSet";
+    m_DescriptorSet = m_Device->CreateDescriptorSet(descriptorSetDesc);
 
     // Create ground plane descriptor set (same layout as model, but separate instance)
     // We MUST use the same layout because they share the same pipeline
-    std::vector<rhi::DescriptorBinding> groundPlaneBindings = bindings;  // Copy all bindings
+    std::vector<DescriptorBindingDesc> groundPlaneBindings = bindings;  // Copy all bindings
 
     // CRITICAL: Array index corresponds to binding number!
     // Index 0 = binding 0 (MVP), Index 1 = binding 1 (Material), Index 2 = binding 2 (Albedo), etc.
@@ -412,57 +350,34 @@ void Application::Init() {
     groundPlaneBindings[7].texture = m_DefaultWhiteTexture;   // binding 7: AO
     groundPlaneBindings[11].texture = m_DefaultBlackTexture;  // binding 11: Emissive (black = no glow)
 
-    m_GroundPlaneDescriptorSet = std::make_unique<rhi::VulkanDescriptorSet>(
-        std::static_pointer_cast<rhi::VulkanDevice>(m_Device)->GetContext(),
-        groundPlaneBindings
-    );
+    rhi::DescriptorSetDesc groundPlaneDescriptorSetDesc;
+    groundPlaneDescriptorSetDesc.bindings = groundPlaneBindings;
+    groundPlaneDescriptorSetDesc.debugName = "GroundPlaneDescriptorSet";
+    m_GroundPlaneDescriptorSet = m_Device->CreateDescriptorSet(groundPlaneDescriptorSetDesc);
 
     // Create shadow descriptor set (for shadow pass rendering)
-    std::vector<rhi::DescriptorBinding> shadowBindings = {
-        {
-            0,  // binding = 0 (Shadow UBO with light space matrix)
-            VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-            VK_SHADER_STAGE_VERTEX_BIT,
-            m_ShadowUniformBuffer,
-            nullptr,  // texture
-            nullptr   // sampler
-        }
+    std::vector<DescriptorBindingDesc> shadowBindings = {
+        { 0, DescriptorType::UniformBuffer, ShaderStage::Vertex, m_ShadowUniformBuffer, nullptr, nullptr }  // Shadow UBO
     };
 
-    m_ShadowDescriptorSet = std::make_unique<rhi::VulkanDescriptorSet>(
-        std::static_pointer_cast<rhi::VulkanDevice>(m_Device)->GetContext(),
-        shadowBindings
-    );
+    rhi::DescriptorSetDesc shadowDescriptorSetDesc;
+    shadowDescriptorSetDesc.bindings = shadowBindings;
+    shadowDescriptorSetDesc.debugName = "ShadowDescriptorSet";
+    m_ShadowDescriptorSet = m_Device->CreateDescriptorSet(shadowDescriptorSetDesc);
 
     // Create skybox descriptor set with 2 bindings
-    std::vector<rhi::DescriptorBinding> skyboxBindings = {
-        {
-            0,  // binding = 0 (MVP matrices - shared with main renderer)
-            VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-            VK_SHADER_STAGE_VERTEX_BIT,
-            m_UniformBuffers[0],
-            nullptr,  // texture
-            nullptr   // sampler
-        },
-        {
-            1,  // binding = 1 (Environment cubemap)
-            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-            VK_SHADER_STAGE_FRAGMENT_BIT,
-            nullptr,  // buffer
-            m_EnvironmentMap,
-            m_CubemapSampler
-        }
+    std::vector<DescriptorBindingDesc> skyboxBindings = {
+        { 0, DescriptorType::UniformBuffer, ShaderStage::Vertex, m_UniformBuffers[0], nullptr, nullptr },  // MVP matrices
+        { 1, DescriptorType::SampledTexture, ShaderStage::Fragment, nullptr, m_EnvironmentMap, m_CubemapSampler }  // Environment cubemap
     };
 
-    m_SkyboxDescriptorSet = std::make_unique<rhi::VulkanDescriptorSet>(
-        std::static_pointer_cast<rhi::VulkanDevice>(m_Device)->GetContext(),
-        skyboxBindings
-    );
+    rhi::DescriptorSetDesc skyboxDescriptorSetDesc;
+    skyboxDescriptorSetDesc.bindings = skyboxBindings;
+    skyboxDescriptorSetDesc.debugName = "SkyboxDescriptorSet";
+    m_SkyboxDescriptorSet = m_Device->CreateDescriptorSet(skyboxDescriptorSetDesc);
 
     // Set descriptor set layout on device before creating pipeline
-    std::static_pointer_cast<rhi::VulkanDevice>(m_Device)->SetDescriptorSetLayout(
-        m_DescriptorSet->GetLayout()
-    );
+    m_Device->SetActiveDescriptorSetLayout(m_DescriptorSet);
 
     // Create triangle resources
     CreateTriangle();
@@ -471,21 +386,15 @@ void Application::Init() {
     CreateModelPipeline();
 
     // Create skybox pipeline with skybox descriptor set layout
-    std::static_pointer_cast<rhi::VulkanDevice>(m_Device)->SetDescriptorSetLayout(
-        m_SkyboxDescriptorSet->GetLayout()
-    );
+    m_Device->SetActiveDescriptorSetLayout(m_SkyboxDescriptorSet);
     CreateSkyboxPipeline();
 
     // Create shadow pipeline with shadow descriptor set layout
-    std::static_pointer_cast<rhi::VulkanDevice>(m_Device)->SetDescriptorSetLayout(
-        m_ShadowDescriptorSet->GetLayout()
-    );
+    m_Device->SetActiveDescriptorSetLayout(m_ShadowDescriptorSet);
     CreateShadowPipeline();
 
     // Restore main descriptor set layout
-    std::static_pointer_cast<rhi::VulkanDevice>(m_Device)->SetDescriptorSetLayout(
-        m_DescriptorSet->GetLayout()
-    );
+    m_Device->SetActiveDescriptorSetLayout(m_DescriptorSet);
 
     // Create skybox cube geometry
     CreateSkyboxCube();
@@ -729,8 +638,8 @@ void Application::CreateTriangle() {
     // Vertex input: position and color
     pipelineDesc.vertexInput.stride = sizeof(float) * 6;
     pipelineDesc.vertexInput.attributes = {
-        { 0, rhi::Format::R32G32B32_SFLOAT, 0 },                // position at location 0
-        { 1, rhi::Format::R32G32B32_SFLOAT, sizeof(float) * 3 } // color at location 1
+        { 0, rhi::Format::R32G32B32_SFLOAT, 0, 0 },                // position at location 0, binding 0
+        { 1, rhi::Format::R32G32B32_SFLOAT, sizeof(float) * 3, 0 } // color at location 1, binding 0
     };
 
     pipelineDesc.topology = rhi::PrimitiveTopology::TriangleList;
@@ -775,9 +684,9 @@ void Application::CreateModelPipeline() {
     // Vertex input: position (vec3), normal (vec3), texcoord (vec2)
     pipelineDesc.vertexInput.stride = sizeof(Vertex);
     pipelineDesc.vertexInput.attributes = {
-        { 0, rhi::Format::R32G32B32_SFLOAT, 0 },                          // position at location 0
-        { 1, rhi::Format::R32G32B32_SFLOAT, sizeof(float) * 3 },          // normal at location 1
-        { 2, rhi::Format::R32G32_SFLOAT, sizeof(float) * 6 }              // texcoord at location 2
+        { 0, rhi::Format::R32G32B32_SFLOAT, 0, 0 },                          // position at location 0, binding 0
+        { 1, rhi::Format::R32G32B32_SFLOAT, sizeof(float) * 3, 0 },          // normal at location 1, binding 0
+        { 2, rhi::Format::R32G32_SFLOAT, sizeof(float) * 6, 0 }              // texcoord at location 2, binding 0
     };
 
     pipelineDesc.topology = rhi::PrimitiveTopology::TriangleList;
@@ -827,7 +736,7 @@ void Application::CreateSkyboxPipeline() {
     // Vertex input: position (vec3) only - used as cubemap direction
     pipelineDesc.vertexInput.stride = sizeof(Vertex);
     pipelineDesc.vertexInput.attributes = {
-        { 0, Format::R32G32B32_SFLOAT, 0 }  // position at location 0
+        { 0, Format::R32G32B32_SFLOAT, 0, 0 }  // position at location 0, binding 0
     };
 
     pipelineDesc.topology = PrimitiveTopology::TriangleList;
@@ -878,7 +787,7 @@ void Application::CreateShadowPipeline() {
     // Vertex input: position (vec3) only
     pipelineDesc.vertexInput.stride = sizeof(Vertex);
     pipelineDesc.vertexInput.attributes = {
-        { 0, Format::R32G32B32_SFLOAT, 0 }  // position at location 0
+        { 0, Format::R32G32B32_SFLOAT, 0, 0 }  // position at location 0, binding 0
     };
 
     pipelineDesc.topology = PrimitiveTopology::TriangleList;
@@ -1148,6 +1057,12 @@ void Application::Render() {
     ubo.view = m_Camera->GetViewMatrix();
     ubo.projection = m_Camera->GetProjectionMatrix();
 
+    // Metal uses OpenGL clip space convention (Y-up), while Vulkan requires Y-flip.
+    // The Camera flips Y for Vulkan, so we undo it for Metal.
+    if (m_Device->GetDeviceInfo().api == rhi::GraphicsAPI::Metal) {
+        ubo.projection[1][1] *= -1.0f;
+    }
+
     // FIXME: Descriptor sets all point to buffer[0], so always update buffer[0]
     // TODO: Properly configure double buffering in descriptor sets
     m_UniformBuffers[0]->CopyData(&ubo, sizeof(ubo));
@@ -1157,24 +1072,16 @@ void Application::Render() {
 
     // Create command buffer
     auto cmd = m_Device->CreateCommandBuffer();
-    auto vkCmd = std::static_pointer_cast<VulkanCommandBuffer>(cmd);
 
     cmd->Begin();
 
-    // CRITICAL: Add buffer memory barrier to ensure light buffer writes are visible to GPU
-    // This barrier ensures the CPU-side light buffer writes complete before fragment shader reads
+    // Advanced features now working on Metal - all features enabled
+    bool debugDisableAdvancedFeatures = false;  // All features enabled: shadows, ground plane, skybox
+
+    // Add buffer memory barrier to ensure light buffer writes are visible to GPU
     auto lightBuffer = m_Scene->GetLightBuffer();
-    if (lightBuffer) {
-        auto vkLightBuffer = std::static_pointer_cast<VulkanBuffer>(lightBuffer);
-        vkCmd->BufferMemoryBarrier(
-            vkLightBuffer->GetHandle(),
-            0,  // offset
-            vkLightBuffer->GetSize(),  // size
-            VK_PIPELINE_STAGE_HOST_BIT,  // srcStage: CPU writes
-            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,  // dstStage: Fragment shader reads
-            VK_ACCESS_HOST_WRITE_BIT,  // srcAccess: CPU writes
-            VK_ACCESS_UNIFORM_READ_BIT  // dstAccess: Shader uniform reads
-        );
+    if (lightBuffer && !debugDisableAdvancedFeatures) {
+        cmd->BufferMemoryBarrier(lightBuffer);
     }
 
     // =============================================================================
@@ -1188,10 +1095,13 @@ void Application::Render() {
                      << ", ShadowMap=" << (m_ShadowMap ? "valid" : "null")
                      << ", Model=" << (m_Model ? "valid" : "null")
                      << ", ModelIsValid=" << (m_Model && m_Model->IsValid() ? "true" : "false");
+        if (debugDisableAdvancedFeatures) {
+            METAGFX_INFO << "DEBUG: Advanced features DISABLED for Metal debugging";
+        }
         loggedConditions = true;
     }
 
-    if (m_EnableShadows && m_ShadowMap && m_Model && m_Model->IsValid()) {
+    if (!debugDisableAdvancedFeatures && m_EnableShadows && m_ShadowMap && m_Model && m_Model->IsValid()) {
         // Debug: Log shadow pass execution
         static bool loggedShadowPass = false;
         if (!loggedShadowPass) {
@@ -1265,9 +1175,7 @@ void Application::Render() {
             cmd->BindPipeline(m_ShadowPipeline);
 
             // Bind shadow descriptor set
-            auto vkShadowPipeline = std::static_pointer_cast<VulkanPipeline>(m_ShadowPipeline);
-            vkCmd->BindDescriptorSet(vkShadowPipeline->GetLayout(),
-                                     m_ShadowDescriptorSet->GetSet(0));
+            cmd->BindDescriptorSet(m_ShadowPipeline, m_ShadowDescriptorSet, 0);
 
             // Render all meshes from light's perspective
             uint32 meshesRendered = 0;
@@ -1322,26 +1230,33 @@ void Application::Render() {
             cmd->EndRendering();
 
             // Add pipeline barrier to ensure shadow map writes complete before sampling
-            auto vkShadowTexture = std::static_pointer_cast<VulkanTexture>(m_ShadowMap->GetDepthTexture());
-            VkImageMemoryBarrier shadowBarrier{};
-            shadowBarrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-            shadowBarrier.oldLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-            shadowBarrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            shadowBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            shadowBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            shadowBarrier.image = vkShadowTexture->GetImage();
-            shadowBarrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
-            shadowBarrier.subresourceRange.baseMipLevel = 0;
-            shadowBarrier.subresourceRange.levelCount = 1;
-            shadowBarrier.subresourceRange.baseArrayLayer = 0;
-            shadowBarrier.subresourceRange.layerCount = 1;
-            shadowBarrier.srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-            shadowBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+#ifdef METAGFX_USE_VULKAN
+            // Only execute Vulkan barrier if Vulkan is the active backend
+            if (m_Device->GetDeviceInfo().api == GraphicsAPI::Vulkan) {
+                auto vkCmd = std::static_pointer_cast<VulkanCommandBuffer>(cmd);
+                auto vkShadowTexture = std::static_pointer_cast<VulkanTexture>(m_ShadowMap->GetDepthTexture());
+                VkImageMemoryBarrier shadowBarrier{};
+                shadowBarrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+                shadowBarrier.oldLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+                shadowBarrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                shadowBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                shadowBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                shadowBarrier.image = vkShadowTexture->GetImage();
+                shadowBarrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+                shadowBarrier.subresourceRange.baseMipLevel = 0;
+                shadowBarrier.subresourceRange.levelCount = 1;
+                shadowBarrier.subresourceRange.baseArrayLayer = 0;
+                shadowBarrier.subresourceRange.layerCount = 1;
+                shadowBarrier.srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+                shadowBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
 
-            vkCmdPipelineBarrier(vkCmd->GetHandle(),
-                                VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
-                                VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                                0, 0, nullptr, 0, nullptr, 1, &shadowBarrier);
+                vkCmdPipelineBarrier(vkCmd->GetHandle(),
+                                    VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
+                                    VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                                    0, 0, nullptr, 0, nullptr, 1, &shadowBarrier);
+            }
+#endif
+            // Note: Metal handles image layout transitions automatically
         }
     }
 
@@ -1360,6 +1275,7 @@ void Application::Render() {
     depthClear.depthStencil.depth = 1.0f;
     depthClear.depthStencil.stencil = 0;
 
+    // Re-enabled depth buffer for Metal testing (Step 2)
     cmd->BeginRendering({ backBuffer }, m_DepthBuffer, { colorClear, depthClear });
     
     // Set viewport and scissor
@@ -1375,21 +1291,25 @@ void Application::Render() {
     scissor.height = swapChain->GetHeight();
     cmd->SetScissor(scissor);
 
-    // Draw the model FIRST
+    // DEBUG: Model rendering test (Step 3)
+    static bool loggedModelTest = false;
+    if (debugDisableAdvancedFeatures && !loggedModelTest) {
+        METAGFX_INFO << "DEBUG: Testing model rendering (shadows/skybox/ground still disabled)";
+        loggedModelTest = true;
+    }
+
+    // Draw the model FIRST - now enabled for Metal testing
     if (m_Model && m_Model->IsValid()) {
         // Bind model pipeline
         cmd->BindPipeline(m_ModelPipeline);
 
         // Bind descriptor set (use current frame index for double buffering)
-        auto vkPipeline = std::static_pointer_cast<VulkanPipeline>(m_ModelPipeline);
-        vkCmd->BindDescriptorSet(vkPipeline->GetLayout(),
-                                 m_DescriptorSet->GetSet(m_CurrentFrame));
+        cmd->BindDescriptorSet(m_ModelPipeline, m_DescriptorSet, m_CurrentFrame);
 
         // Push camera position for specular lighting
         glm::vec4 cameraPos(m_Camera->GetPosition(), 1.0f);
-        vkCmd->PushConstants(vkPipeline->GetLayout(),
-                            VK_SHADER_STAGE_FRAGMENT_BIT,
-                            0, sizeof(glm::vec4), &cameraPos);
+        cmd->PushConstants(m_ModelPipeline, ShaderStage::Fragment,
+                           0, sizeof(glm::vec4), &cameraPos);
 
         // Draw all meshes in the model
         for (const auto& mesh : m_Model->GetMeshes()) {
@@ -1458,8 +1378,7 @@ void Application::Render() {
                 }
 
                 // Re-bind descriptor set after texture updates
-                vkCmd->BindDescriptorSet(vkPipeline->GetLayout(),
-                                        m_DescriptorSet->GetSet(m_CurrentFrame));
+                cmd->BindDescriptorSet(m_ModelPipeline, m_DescriptorSet, m_CurrentFrame);
 
                 // Push material flags and exposure (offset 16 bytes after cameraPosition vec4)
                 uint32_t flags = material->GetTextureFlags();
@@ -1479,25 +1398,21 @@ void Application::Render() {
                 }
 
                 // Push flags (offset 16, size 4)
-                vkCmd->PushConstants(vkPipeline->GetLayout(),
-                                    VK_SHADER_STAGE_FRAGMENT_BIT,
-                                    16, sizeof(uint32_t), &flags);
+                cmd->PushConstants(m_ModelPipeline, ShaderStage::Fragment,
+                                   16, sizeof(uint32_t), &flags);
 
                 // Push exposure (offset 20, size 4)
-                vkCmd->PushConstants(vkPipeline->GetLayout(),
-                                    VK_SHADER_STAGE_FRAGMENT_BIT,
-                                    20, sizeof(float), &m_Exposure);
+                cmd->PushConstants(m_ModelPipeline, ShaderStage::Fragment,
+                                   20, sizeof(float), &m_Exposure);
 
                 // Push IBL enable flag (offset 24, size 4)
                 uint32_t enableIBL = m_EnableIBL ? 1u : 0u;
-                vkCmd->PushConstants(vkPipeline->GetLayout(),
-                                    VK_SHADER_STAGE_FRAGMENT_BIT,
-                                    24, sizeof(uint32_t), &enableIBL);
+                cmd->PushConstants(m_ModelPipeline, ShaderStage::Fragment,
+                                   24, sizeof(uint32_t), &enableIBL);
 
                 // Push IBL intensity (offset 28, size 4)
-                vkCmd->PushConstants(vkPipeline->GetLayout(),
-                                    VK_SHADER_STAGE_FRAGMENT_BIT,
-                                    28, sizeof(float), &m_IBLIntensity);
+                cmd->PushConstants(m_ModelPipeline, ShaderStage::Fragment,
+                                   28, sizeof(float), &m_IBLIntensity);
 
                 // Push shadow debug mode (offset 32, size 4)
                 uint32_t shadowDebugMode = static_cast<uint32_t>(m_ShadowDebugMode);
@@ -1509,9 +1424,8 @@ void Application::Render() {
                     loggedDebugMode = true;
                 }
 
-                vkCmd->PushConstants(vkPipeline->GetLayout(),
-                                    VK_SHADER_STAGE_FRAGMENT_BIT,
-                                    32, sizeof(uint32_t), &shadowDebugMode);
+                cmd->PushConstants(m_ModelPipeline, ShaderStage::Fragment,
+                                   32, sizeof(uint32_t), &shadowDebugMode);
 
                 // Push shadow enable flag (offset 36, size 4)
                 uint32_t enableShadows = m_EnableShadows ? 1u : 0u;
@@ -1523,9 +1437,8 @@ void Application::Render() {
                     loggedShadowState = true;
                 }
 
-                vkCmd->PushConstants(vkPipeline->GetLayout(),
-                                    VK_SHADER_STAGE_FRAGMENT_BIT,
-                                    36, sizeof(uint32_t), &enableShadows);
+                cmd->PushConstants(m_ModelPipeline, ShaderStage::Fragment,
+                                   36, sizeof(uint32_t), &enableShadows);
 
                 // Bind and draw
                 cmd->BindVertexBuffer(mesh->GetVertexBuffer());
@@ -1536,7 +1449,7 @@ void Application::Render() {
     }
 
     // Render ground plane with simple grey material (if enabled)
-    if (m_ShowGroundPlane && m_GroundPlane && m_GroundPlane->IsValid()) {
+    if (!debugDisableAdvancedFeatures && m_ShowGroundPlane && m_GroundPlane && m_GroundPlane->IsValid()) {
         // Create a simple grey material for the ground
         // Use darker grey to make shadows more visible
         MaterialProperties groundMat{};
@@ -1551,13 +1464,11 @@ void Application::Render() {
         // causes issues. Just bind the pre-configured descriptor set.
 
         // Bind ground plane's dedicated descriptor set (use current frame for double buffering)
-        auto vkCmd = std::static_pointer_cast<VulkanCommandBuffer>(cmd);
-        auto vkPipeline = std::static_pointer_cast<VulkanPipeline>(m_ModelPipeline);
-        vkCmd->BindDescriptorSet(vkPipeline->GetLayout(), m_GroundPlaneDescriptorSet->GetSet(m_CurrentFrame));
+        cmd->BindDescriptorSet(m_ModelPipeline, m_GroundPlaneDescriptorSet, m_CurrentFrame);
 
         // Push material flags (no textures)
         uint32_t flags = 0;
-        vkCmd->PushConstants(vkPipeline->GetLayout(), VK_SHADER_STAGE_FRAGMENT_BIT, 16, sizeof(uint32_t), &flags);
+        cmd->PushConstants(m_ModelPipeline, ShaderStage::Fragment, 16, sizeof(uint32_t), &flags);
 
         // Draw ground plane
         for (const auto& mesh : m_GroundPlane->GetMeshes()) {
@@ -1570,19 +1481,15 @@ void Application::Render() {
     }
 
     // Render skybox LAST (only where depth >= model depth)
-    if (m_ShowSkybox && m_EnvironmentMap && m_SkyboxPipeline && m_SkyboxVertexBuffer && m_SkyboxIndexBuffer && m_SkyboxDescriptorSet) {
+    if (!debugDisableAdvancedFeatures && m_ShowSkybox && m_EnvironmentMap && m_SkyboxPipeline && m_SkyboxVertexBuffer && m_SkyboxIndexBuffer && m_SkyboxDescriptorSet) {
         cmd->BindPipeline(m_SkyboxPipeline);
-
-        // Get Vulkan-specific objects
-        auto vkSkyboxPipeline = std::static_pointer_cast<VulkanPipeline>(m_SkyboxPipeline);
 
         // Update skybox descriptor set with uniform buffer (always use buffer[0])
         // FIXME: Matches main renderer which always updates buffer[0]
         m_SkyboxDescriptorSet->UpdateBuffer(0, m_UniformBuffers[0]);
 
         // Bind skybox descriptor set (binding 0: MVP, binding 1: environment cubemap)
-        vkCmd->BindDescriptorSet(vkSkyboxPipeline->GetLayout(),
-                                 m_SkyboxDescriptorSet->GetSet(m_CurrentFrame));
+        cmd->BindDescriptorSet(m_SkyboxPipeline, m_SkyboxDescriptorSet, m_CurrentFrame);
 
         // Push constants: exposure and LOD
         struct SkyboxPushConstants {
@@ -1593,9 +1500,8 @@ void Application::Render() {
         skyboxPushConstants.exposure = m_Exposure;
         skyboxPushConstants.lod = m_SkyboxLOD;
 
-        vkCmd->PushConstants(vkSkyboxPipeline->GetLayout(),
-                            VK_SHADER_STAGE_FRAGMENT_BIT,
-                            0, sizeof(SkyboxPushConstants), &skyboxPushConstants);
+        cmd->PushConstants(m_SkyboxPipeline, ShaderStage::Fragment,
+                           0, sizeof(SkyboxPushConstants), &skyboxPushConstants);
 
         // Draw the skybox cube
         cmd->BindVertexBuffer(m_SkyboxVertexBuffer);
@@ -1603,10 +1509,10 @@ void Application::Render() {
         cmd->DrawIndexed(36);  // 36 indices for the cube
     }
 
-    cmd->EndRendering();
-
-    // Render ImGui overlay into the same command buffer
+    // Render ImGui overlay BEFORE EndRendering (Metal needs active encoder)
     RenderImGui(cmd, backBuffer);
+
+    cmd->EndRendering();
 
     cmd->End();
 
@@ -1696,6 +1602,36 @@ void Application::Shutdown() {
 }
 
 void Application::InitImGui() {
+    auto api = m_Device->GetDeviceInfo().api;
+
+    // Setup ImGui context (common for all backends)
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImGuiIO& io = ImGui::GetIO();
+    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+    ImGui::StyleColorsDark();
+
+    if (api == rhi::GraphicsAPI::Metal) {
+        // Initialize ImGui for Metal backend
+        auto metalDevice = std::static_pointer_cast<rhi::MetalDevice>(m_Device);
+        auto& context = metalDevice->GetContext();
+
+        ImGui_ImplSDL3_InitForMetal(m_Window);
+        ImGui_ImplMetal_Init(context.device);
+
+        // Create fonts texture for Metal
+        ImGui_ImplMetal_CreateFontsTexture(context.device);
+
+        METAGFX_INFO << "ImGui initialized for Metal backend";
+        return;
+    }
+
+    if (api != rhi::GraphicsAPI::Vulkan) {
+        METAGFX_INFO << "ImGui not supported for this backend yet";
+        ImGui::DestroyContext();
+        return;
+    }
+
     auto vkDevice = std::static_pointer_cast<rhi::VulkanDevice>(m_Device);
     auto& context = vkDevice->GetContext();
     auto swapChain = m_Device->GetSwapChain();
@@ -1723,15 +1659,6 @@ void Application::InitImGui() {
     poolInfo.pPoolSizes = poolSizes;
 
     vkCreateDescriptorPool(context.device, &poolInfo, nullptr, &m_ImGuiDescriptorPool);
-
-    // Setup ImGui context
-    IMGUI_CHECKVERSION();
-    ImGui::CreateContext();
-    ImGuiIO& io = ImGui::GetIO();
-    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
-
-    // Setup style
-    ImGui::StyleColorsDark();
 
     // Create ImGui render pass
     VkAttachmentDescription attachment{};
@@ -1809,6 +1736,19 @@ void Application::InitImGui() {
 void Application::ShutdownImGui() {
     if (!m_Device) return;
 
+    auto api = m_Device->GetDeviceInfo().api;
+
+    if (api == rhi::GraphicsAPI::Metal) {
+        ImGui_ImplMetal_Shutdown();
+        ImGui_ImplSDL3_Shutdown();
+        ImGui::DestroyContext();
+        return;
+    }
+
+    if (api != rhi::GraphicsAPI::Vulkan) {
+        return;
+    }
+
     auto vkDevice = std::static_pointer_cast<rhi::VulkanDevice>(m_Device);
     auto& context = vkDevice->GetContext();
 
@@ -1838,39 +1778,128 @@ void Application::ShutdownImGui() {
 }
 
 void Application::RenderImGui(Ref<rhi::CommandBuffer> cmd, Ref<rhi::Texture> backBuffer) {
-    // METAGFX_INFO << "RenderImGui: ENTRY";
     if (!m_Device || !cmd || !backBuffer) {
-        // METAGFX_INFO << "RenderImGui: Early exit - null pointer";
         return;
     }
 
-    auto vkDevice = std::static_pointer_cast<rhi::VulkanDevice>(m_Device);
-    if (!vkDevice) {
-        // METAGFX_INFO << "RenderImGui: Early exit - vkDevice null";
-        return;
-    }
-
-    auto& context = vkDevice->GetContext();
-    auto swapChain = m_Device->GetSwapChain();
-    if (!swapChain) {
-        // METAGFX_INFO << "RenderImGui: Early exit - swapChain null";
-        return;
-    }
+    auto api = m_Device->GetDeviceInfo().api;
 
     // Start ImGui frame
-    // METAGFX_INFO << "RenderImGui: Calling ImGui_ImplVulkan_NewFrame";
-    ImGui_ImplVulkan_NewFrame();
-    // METAGFX_INFO << "RenderImGui: Calling ImGui_ImplSDL3_NewFrame";
     ImGui_ImplSDL3_NewFrame();
-    // METAGFX_INFO << "RenderImGui: Calling ImGui::NewFrame";
+
+    if (api == rhi::GraphicsAPI::Metal) {
+        // Metal backend needs NewFrame with render pass descriptor
+        auto metalCmd = std::static_pointer_cast<rhi::MetalCommandBuffer>(cmd);
+        auto encoder = metalCmd->GetRenderEncoder();
+        if (!encoder) {
+            return;  // No active render encoder
+        }
+
+        // Create render pass descriptor matching our current render target
+        MTL::RenderPassDescriptor* renderPassDesc = MTL::RenderPassDescriptor::alloc()->init();
+
+        // Set up color attachment
+        auto colorAttachment = renderPassDesc->colorAttachments()->object(0);
+        auto metalTexture = std::static_pointer_cast<rhi::MetalTexture>(backBuffer);
+        colorAttachment->setTexture(metalTexture->GetHandle());
+        colorAttachment->setLoadAction(MTL::LoadActionLoad);  // Keep existing content
+        colorAttachment->setStoreAction(MTL::StoreActionStore);
+
+        ImGui_ImplMetal_NewFrame(renderPassDesc);
+        renderPassDesc->release();
+
+        static bool logged = false;
+        if (!logged) {
+            METAGFX_INFO << "ImGui Metal NewFrame called";
+            logged = true;
+        }
+    }
+
     ImGui::NewFrame();
-    // METAGFX_INFO << "RenderImGui: ImGui frame started";
 
     // Define UI
     // METAGFX_INFO << "RenderImGui: Creating UI";
-    ImGui::SetNextWindowSize(ImVec2(350, 550), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(350, 600), ImGuiCond_FirstUseEver);
     ImGui::Begin("MetaGFX Controls");
 
+    // Graphics Backend Info
+    ImGui::Text("Graphics Backend");
+    ImGui::Separator();
+
+    // Display current backend info
+    const auto& deviceInfo = m_Device->GetDeviceInfo();
+    const char* currentApiName = "Unknown";
+    switch (deviceInfo.api) {
+        case rhi::GraphicsAPI::Vulkan: currentApiName = "Vulkan"; break;
+        case rhi::GraphicsAPI::Direct3D12: currentApiName = "D3D12"; break;
+        case rhi::GraphicsAPI::Metal: currentApiName = "Metal"; break;
+        case rhi::GraphicsAPI::WebGPU: currentApiName = "WebGPU"; break;
+    }
+    ImGui::Text("API: %s", currentApiName);
+    ImGui::Text("Device: %s", deviceInfo.deviceName.c_str());
+
+    // Backend selection combo (for next launch)
+    static int selectedBackend = static_cast<int>(m_Config.graphicsAPI);
+    const char* backendNames[] = { "Vulkan", "D3D12", "Metal", "WebGPU" };
+
+    // Determine which backends are available
+    bool vulkanAvailable = false;
+    bool metalAvailable = false;
+#ifdef METAGFX_USE_VULKAN
+    vulkanAvailable = true;
+#endif
+#ifdef METAGFX_USE_METAL
+    metalAvailable = true;
+#endif
+
+    ImGui::Spacing();
+    ImGui::Text("Change Backend (requires restart):");
+
+    // Show combo with only available backends
+    int previousBackend = selectedBackend;
+    if (ImGui::BeginCombo("##backend", backendNames[selectedBackend])) {
+        if (vulkanAvailable) {
+            bool isSelected = (selectedBackend == 0);
+            if (ImGui::Selectable("Vulkan", isSelected)) {
+                selectedBackend = 0;
+            }
+            if (isSelected) ImGui::SetItemDefaultFocus();
+        }
+        // D3D12 - index 1 (Windows only, not implemented yet)
+        if (metalAvailable) {
+            bool isSelected = (selectedBackend == 2);
+            if (ImGui::Selectable("Metal", isSelected)) {
+                selectedBackend = 2;
+            }
+            if (isSelected) ImGui::SetItemDefaultFocus();
+        }
+        ImGui::EndCombo();
+    }
+
+    // Save to config file if selection changed
+    if (selectedBackend != previousBackend) {
+        const char* backendStr = "Vulkan";
+        switch (selectedBackend) {
+            case 0: backendStr = "Vulkan"; break;
+            case 1: backendStr = "Direct3D12"; break;
+            case 2: backendStr = "Metal"; break;
+            case 3: backendStr = "WebGPU"; break;
+        }
+        std::ofstream configFile("metagfx.cfg");
+        if (configFile.is_open()) {
+            configFile << "backend=" << backendStr << std::endl;
+            configFile.close();
+            METAGFX_INFO << "Saved backend preference: " << backendStr;
+        }
+    }
+
+    // Show warning if selection differs from current
+    if (selectedBackend != static_cast<int>(deviceInfo.api)) {
+        ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.0f, 1.0f), "Restart required to apply change");
+    }
+
+    ImGui::Spacing();
+    ImGui::Separator();
     ImGui::Text("Rendering Controls");
     ImGui::Separator();
 
@@ -2017,26 +2046,44 @@ void Application::RenderImGui(Ref<rhi::CommandBuffer> cmd, Ref<rhi::Texture> bac
     }
 
     // Render ImGui
-    // METAGFX_INFO << "RenderImGui: Calling ImGui::Render";
     ImGui::Render();
 
     // Check if there's anything to draw
     ImDrawData* drawData = ImGui::GetDrawData();
-    // METAGFX_INFO << "RenderImGui: DrawData vertices=" << (drawData ? drawData->TotalVtxCount : -1);
     if (!drawData || drawData->TotalVtxCount == 0) {
-        // METAGFX_INFO << "RenderImGui: No draw data, returning";
         return;  // Nothing to draw
     }
 
-    // Get image index from swap chain
-    // METAGFX_INFO << "RenderImGui: Getting image index";
+    // Backend-specific rendering
+    if (api == rhi::GraphicsAPI::Metal) {
+        // Metal: Render directly to the current render encoder
+        auto metalCmd = std::static_pointer_cast<rhi::MetalCommandBuffer>(cmd);
+
+        static bool logged = false;
+        if (!logged) {
+            METAGFX_INFO << "ImGui Metal RenderDrawData: vertices=" << drawData->TotalVtxCount;
+            logged = true;
+        }
+
+        ImGui_ImplMetal_RenderDrawData(drawData,
+                                       metalCmd->GetHandle(),
+                                       metalCmd->GetRenderEncoder());
+        return;
+    }
+
+    if (api != rhi::GraphicsAPI::Vulkan) {
+        return;
+    }
+
+    // Vulkan rendering
+    auto vkDevice = std::static_pointer_cast<rhi::VulkanDevice>(m_Device);
+    auto& context = vkDevice->GetContext();
+    auto swapChain = m_Device->GetSwapChain();
     auto vkSwapChain = std::static_pointer_cast<rhi::VulkanSwapChain>(swapChain);
     if (!vkSwapChain) {
-        // METAGFX_INFO << "RenderImGui: vkSwapChain is null";
         return;
     }
     uint32_t imageIndex = vkSwapChain->GetCurrentImageIndex();
-    // METAGFX_INFO << "RenderImGui: Image index=" << imageIndex;
 
     auto vkTexture = std::static_pointer_cast<rhi::VulkanTexture>(backBuffer);
     if (!vkTexture) {

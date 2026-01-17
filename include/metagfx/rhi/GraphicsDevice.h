@@ -18,6 +18,7 @@ class Pipeline;
 class CommandBuffer;
 class SwapChain;
 class Framebuffer;
+class DescriptorSet;
 
 class GraphicsDevice {
 public:
@@ -33,7 +34,12 @@ public:
     virtual Ref<Shader> CreateShader(const ShaderDesc& desc) = 0;
     virtual Ref<Pipeline> CreateGraphicsPipeline(const PipelineDesc& desc) = 0;
     virtual Ref<Framebuffer> CreateFramebuffer(const FramebufferDesc& desc) = 0;
-    
+    virtual Ref<DescriptorSet> CreateDescriptorSet(const DescriptorSetDesc& desc) = 0;
+
+    // Descriptor set layout management (for pipeline creation)
+    // Sets the active descriptor set layout that will be used for subsequent pipeline creation
+    virtual void SetActiveDescriptorSetLayout(Ref<DescriptorSet> descriptorSet) = 0;
+
     // Command buffer management
     virtual Ref<CommandBuffer> CreateCommandBuffer() = 0;
     virtual void SubmitCommandBuffer(Ref<CommandBuffer> commandBuffer) = 0;

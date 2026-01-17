@@ -56,12 +56,29 @@ enum class MemoryUsage {
 };
 
 enum class ShaderStage {
-    Vertex,
-    Fragment,
-    Compute,
-    Geometry,
-    TessellationControl,
-    TessellationEvaluation
+    Vertex      = 1 << 0,
+    Fragment    = 1 << 1,
+    Compute     = 1 << 2,
+    Geometry    = 1 << 3,
+    TessellationControl = 1 << 4,
+    TessellationEvaluation = 1 << 5
+};
+
+inline ShaderStage operator|(ShaderStage a, ShaderStage b) {
+    return static_cast<ShaderStage>(static_cast<int>(a) | static_cast<int>(b));
+}
+
+inline ShaderStage operator&(ShaderStage a, ShaderStage b) {
+    return static_cast<ShaderStage>(static_cast<int>(a) & static_cast<int>(b));
+}
+
+// Backend-agnostic descriptor types
+enum class DescriptorType {
+    UniformBuffer,
+    StorageBuffer,
+    SampledTexture,      // Texture + sampler combined
+    StorageTexture,      // Read/write texture
+    Sampler              // Standalone sampler
 };
 
 enum class PrimitiveTopology {
@@ -352,11 +369,34 @@ struct ClearValue {
         float depth;
         uint32 stencil;
     };
-    
+
     union {
         float color[4];
         DepthStencilValue depthStencil;
     };
+};
+
+// Forward declarations for descriptor binding
+class Buffer;
+class Texture;
+class Sampler;
+
+// Backend-agnostic descriptor binding description
+struct DescriptorBindingDesc {
+    uint32 binding = 0;
+    DescriptorType type = DescriptorType::UniformBuffer;
+    ShaderStage stageFlags = ShaderStage::Vertex;
+
+    // Resources (only set the ones relevant to the descriptor type)
+    Ref<Buffer> buffer;    // For UniformBuffer, StorageBuffer
+    Ref<Texture> texture;  // For SampledTexture, StorageTexture
+    Ref<Sampler> sampler;  // For SampledTexture, Sampler
+};
+
+// Descriptor set layout description
+struct DescriptorSetDesc {
+    std::vector<DescriptorBindingDesc> bindings;
+    const char* debugName = nullptr;
 };
 
 } // namespace rhi

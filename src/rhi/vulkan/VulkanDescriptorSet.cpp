@@ -10,10 +10,62 @@
 namespace metagfx {
 namespace rhi {
 
-VulkanDescriptorSet::VulkanDescriptorSet(VulkanContext& context, 
+// Convert backend-agnostic DescriptorType to Vulkan
+VkDescriptorType VulkanDescriptorSet::ToVulkanDescriptorType(DescriptorType type) {
+    switch (type) {
+        case DescriptorType::UniformBuffer: return VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        case DescriptorType::StorageBuffer: return VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        case DescriptorType::SampledTexture: return VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        case DescriptorType::StorageTexture: return VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        case DescriptorType::Sampler: return VK_DESCRIPTOR_TYPE_SAMPLER;
+        default: return VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    }
+}
+
+// Convert backend-agnostic ShaderStage to Vulkan
+VkShaderStageFlags VulkanDescriptorSet::ToVulkanShaderStage(ShaderStage stage) {
+    VkShaderStageFlags flags = 0;
+    if (static_cast<int>(stage) & static_cast<int>(ShaderStage::Vertex))
+        flags |= VK_SHADER_STAGE_VERTEX_BIT;
+    if (static_cast<int>(stage) & static_cast<int>(ShaderStage::Fragment))
+        flags |= VK_SHADER_STAGE_FRAGMENT_BIT;
+    if (static_cast<int>(stage) & static_cast<int>(ShaderStage::Compute))
+        flags |= VK_SHADER_STAGE_COMPUTE_BIT;
+    if (static_cast<int>(stage) & static_cast<int>(ShaderStage::Geometry))
+        flags |= VK_SHADER_STAGE_GEOMETRY_BIT;
+    if (static_cast<int>(stage) & static_cast<int>(ShaderStage::TessellationControl))
+        flags |= VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT;
+    if (static_cast<int>(stage) & static_cast<int>(ShaderStage::TessellationEvaluation))
+        flags |= VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT;
+    return flags;
+}
+
+// Constructor from backend-agnostic descriptor set description
+VulkanDescriptorSet::VulkanDescriptorSet(VulkanContext& context, const DescriptorSetDesc& desc)
+    : m_Context(context) {
+
+    // Convert backend-agnostic bindings to Vulkan bindings
+    for (const auto& binding : desc.bindings) {
+        DescriptorBinding vkBinding;
+        vkBinding.binding = binding.binding;
+        vkBinding.type = ToVulkanDescriptorType(binding.type);
+        vkBinding.stageFlags = ToVulkanShaderStage(binding.stageFlags);
+        vkBinding.buffer = binding.buffer;
+        vkBinding.texture = binding.texture;
+        vkBinding.sampler = binding.sampler;
+        m_Bindings.push_back(vkBinding);
+    }
+
+    CreateLayout(m_Bindings);
+    AllocateSets();
+    UpdateSets(m_Bindings);
+}
+
+// Legacy constructor for backward compatibility
+VulkanDescriptorSet::VulkanDescriptorSet(VulkanContext& context,
                                          const std::vector<DescriptorBinding>& bindings)
     : m_Context(context), m_Bindings(bindings) {
-    
+
     CreateLayout(bindings);
     AllocateSets();
     UpdateSets(bindings);
@@ -167,6 +219,17 @@ void VulkanDescriptorSet::UpdateTexture(uint32 binding, Ref<Texture> texture, Re
         }
     }
     UpdateSets(m_Bindings);
+}
+
+void* VulkanDescriptorSet::GetNativeHandle(uint32 frameIndex) const {
+    if (frameIndex < m_DescriptorSets.size()) {
+        return (void*)m_DescriptorSets[frameIndex];
+    }
+    return nullptr;
+}
+
+void* VulkanDescriptorSet::GetNativeLayout() const {
+    return (void*)m_Layout;
 }
 
 } // namespace rhi
