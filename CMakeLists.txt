@@ -25,6 +25,13 @@ elseif(UNIX)
     set(METAGFX_PLATFORM_LINUX TRUE)
 endif()
 
+# Emscripten detection (for web builds)
+if(EMSCRIPTEN)
+    set(METAGFX_PLATFORM_WEB TRUE)
+    set(METAGFX_USE_WEBGPU ON CACHE BOOL "" FORCE)
+    message(STATUS "Emscripten detected - enabling WebGPU support automatically")
+endif()
+
 # Output directories
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)

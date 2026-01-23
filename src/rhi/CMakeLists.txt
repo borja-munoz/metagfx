@@ -143,3 +143,68 @@ if(METAGFX_USE_METAL)
         set(METAGFX_USE_METAL OFF CACHE BOOL "Metal support disabled (not on Apple platform)" FORCE)
     endif()
 endif()
+
+# WebGPU (all platforms via Dawn)
+if(METAGFX_USE_WEBGPU)
+    list(APPEND RHI_SOURCES
+        webgpu/WebGPUTypes.cpp
+        webgpu/WebGPUDevice.cpp
+        webgpu/WebGPUSwapChain.cpp
+        webgpu/WebGPUBuffer.cpp
+        webgpu/WebGPUTexture.cpp
+        webgpu/WebGPUSampler.cpp
+        webgpu/WebGPUShader.cpp
+        webgpu/WebGPUPipeline.cpp
+        webgpu/WebGPUCommandBuffer.cpp
+        webgpu/WebGPUDescriptorSet.cpp
+        webgpu/WebGPUFramebuffer.cpp
+        webgpu/WebGPUSurfaceBridge.cpp
+    )
+
+    # Platform-specific surface bridges
+    if(WIN32)
+        list(APPEND RHI_SOURCES webgpu/WebGPUSurfaceBridge_Windows.cpp)
+    elseif(APPLE)
+        list(APPEND RHI_SOURCES webgpu/WebGPUSurfaceBridge_Metal.mm)
+    elseif(EMSCRIPTEN)
+        list(APPEND RHI_SOURCES webgpu/WebGPUSurfaceBridge_Web.cpp)
+    elseif(UNIX)
+        list(APPEND RHI_SOURCES webgpu/WebGPUSurfaceBridge_Linux.cpp)
+    endif()
+
+    list(APPEND RHI_HEADERS
+        ${CMAKE_SOURCE_DIR}/include/metagfx/rhi/webgpu/WebGPUTypes.h
+        ${CMAKE_SOURCE_DIR}/include/metagfx/rhi/webgpu/WebGPUDevice.h
+        ${CMAKE_SOURCE_DIR}/include/metagfx/rhi/webgpu/WebGPUSwapChain.h
+        ${CMAKE_SOURCE_DIR}/include/metagfx/rhi/webgpu/WebGPUBuffer.h
+        ${CMAKE_SOURCE_DIR}/include/metagfx/rhi/webgpu/WebGPUTexture.h
+        ${CMAKE_SOURCE_DIR}/include/metagfx/rhi/webgpu/WebGPUSampler.h
+        ${CMAKE_SOURCE_DIR}/include/metagfx/rhi/webgpu/WebGPUShader.h
+        ${CMAKE_SOURCE_DIR}/include/metagfx/rhi/webgpu/WebGPUPipeline.h
+        ${CMAKE_SOURCE_DIR}/include/metagfx/rhi/webgpu/WebGPUCommandBuffer.h
+        ${CMAKE_SOURCE_DIR}/include/metagfx/rhi/webgpu/WebGPUDescriptorSet.h
+        ${CMAKE_SOURCE_DIR}/include/metagfx/rhi/webgpu/WebGPUFramebuffer.h
+        ${CMAKE_SOURCE_DIR}/include/metagfx/rhi/webgpu/WebGPUSurfaceBridge.h
+    )
+
+    # Add Dawn and SPIRV-Cross include paths
+    target_include_directories(metagfx_rhi
+        PUBLIC
+            /Users/Borja/dev/dawn/dawn_install/include  # Dawn headers (webgpu/webgpu_cpp.h)
+        PRIVATE
+            ${CMAKE_SOURCE_DIR}/external/SPIRV-Cross
+    )
+
+    # Link Dawn, Tint, and SPIRV-Cross
+    # Dawn is found via find_package() and provides webgpu_dawn and libtint targets
+    target_link_libraries(metagfx_rhi
+        PUBLIC
+            webgpu_dawn          # Dawn WebGPU C++ bindings
+        PRIVATE
+            libtint              # Tint for SPIR-V → WGSL transpilation (part of Dawn)
+            spirv-cross-glsl     # Keep for analysis/fallback
+    )
+
+    target_compile_definitions(metagfx_rhi PUBLIC METAGFX_USE_WEBGPU)
+    message(STATUS "WebGPU support enabled (using Google Dawn)")
+endif()

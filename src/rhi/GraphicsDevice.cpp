@@ -12,6 +12,10 @@
 #include "metagfx/rhi/metal/MetalDevice.h"
 #endif
 
+#ifdef METAGFX_USE_WEBGPU
+#include "metagfx/rhi/webgpu/WebGPUDevice.h"
+#endif
+
 namespace metagfx {
 namespace rhi {
 
@@ -37,8 +41,8 @@ Ref<GraphicsDevice> CreateGraphicsDevice(GraphicsAPI api, void* nativeWindowHand
 
 #ifdef METAGFX_USE_WEBGPU
         case GraphicsAPI::WebGPU:
-            METAGFX_ERROR << "WebGPU not yet implemented (Milestone 4.3)";
-            return nullptr;
+            METAGFX_INFO << "Creating WebGPU graphics device...";
+            return CreateRef<WebGPUDevice>(static_cast<SDL_Window*>(nativeWindowHandle));
 #endif
             
         default:
