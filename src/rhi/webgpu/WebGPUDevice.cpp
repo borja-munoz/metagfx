@@ -74,7 +74,7 @@ void WebGPUDevice::CreateInstance() {
     m_Context.instance = wgpu::CreateInstance(&instanceDesc);
 
     if (!m_Context.instance) {
-        WEBGPU_LOG_ERROR("Failed to create WebGPU instance");
+        METAGFX_ERROR << "Failed to create WebGPU instance";
         throw std::runtime_error("Failed to create WebGPU instance");
     }
 
@@ -96,34 +96,40 @@ void WebGPUDevice::RequestAdapter() {
     wgpu::RequestAdapterOptions adapterOpts{};
     adapterOpts.powerPreference = wgpu::PowerPreference::HighPerformance;
 
+    // Modern Dawn API uses callback info structure
     auto callback = [](WGPURequestAdapterStatus status, WGPUAdapter adapter,
-                       char const* message, void* userdata) {
-        auto* data = static_cast<AdapterRequestData*>(userdata);
+                       WGPUStringView message, void* userdata1, void* /* userdata2 */) {
+        auto* data = static_cast<AdapterRequestData*>(userdata1);
 
         if (status == WGPURequestAdapterStatus_Success) {
             *data->adapter = wgpu::Adapter::Acquire(adapter);
             data->success = true;
         } else {
-            METAGFX_ERROR << "Failed to request adapter: " << (message ? message : "Unknown error");
+            const char* msgStr = message.data ? message.data : "Unknown error";
+            METAGFX_ERROR << "Failed to request adapter: " << msgStr;
         }
 
         data->done = true;
     };
 
-    m_Context.instance.RequestAdapter(&adapterOpts, callback, &data);
+    WGPURequestAdapterCallbackInfo callbackInfo{};
+    callbackInfo.mode = WGPUCallbackMode_AllowProcessEvents;
+    callbackInfo.callback = callback;
+    callbackInfo.userdata1 = &data;
+
+    WGPUInstance instance = m_Context.instance.Get();
+    wgpuInstanceRequestAdapter(instance, reinterpret_cast<const WGPURequestAdapterOptions*>(&adapterOpts), callbackInfo);
 
     // Wait for callback (blocking on native platforms)
 #ifndef __EMSCRIPTEN__
     while (!data.done) {
         // Process events to allow callback to execute
-#ifdef __EMSCRIPTEN__
-        emscripten_sleep(1);
-#endif
+        wgpuInstanceProcessEvents(instance);
     }
 #endif
 
     if (!data.success || !m_Context.adapter) {
-        WEBGPU_LOG_ERROR("Failed to obtain WebGPU adapter");
+        METAGFX_ERROR << "Failed to obtain WebGPU adapter";
         throw std::runtime_error("Failed to obtain WebGPU adapter");
     }
 
@@ -142,45 +148,104 @@ void WebGPUDevice::RequestDevice() {
     data.device = &m_Context.device;
 
     // Configure required device limits
-    wgpu::RequiredLimits requiredLimits{};
-    requiredLimits.limits.maxBindGroups = 4;
-    requiredLimits.limits.maxUniformBufferBindingSize = 65536;
-    requiredLimits.limits.maxStorageBufferBindingSize = 134217728;  // 128MB
-    requiredLimits.limits.maxBufferSize = 268435456;  // 256MB
-    requiredLimits.limits.maxVertexBuffers = 8;
-    requiredLimits.limits.maxVertexAttributes = 16;
+    // NOTE: WebGPU requires minUniformBufferOffsetAlignment to be at least 256
+    WGPULimits requiredLimits{};
+    requiredLimits.maxBindGroups = 4;
+    requiredLimits.maxUniformBufferBindingSize = 65536;
+    requiredLimits.maxStorageBufferBindingSize = 134217728;  // 128MB
+    requiredLimits.maxBufferSize = 268435456;  // 256MB
+    requiredLimits.maxVertexBuffers = 8;
+    requiredLimits.maxVertexAttributes = 16;
+    requiredLimits.minUniformBufferOffsetAlignment = 256;  // Required by WebGPU spec
+    requiredLimits.minStorageBufferOffsetAlignment = 256;
 
-    wgpu::DeviceDescriptor deviceDesc{};
+    // Device lost callback
+    auto lostCallback = [](WGPUDevice const * /* device */, WGPUDeviceLostReason reason,
+                           WGPUStringView message, void* /* userdata1 */, void* /* userdata2 */) {
+        const char* reasonStr = "Unknown";
+        switch (reason) {
+            case WGPUDeviceLostReason_Unknown: reasonStr = "Unknown"; break;
+            case WGPUDeviceLostReason_Destroyed: reasonStr = "Destroyed"; break;
+            case WGPUDeviceLostReason_CallbackCancelled: reasonStr = "Callback Cancelled"; break;
+            case WGPUDeviceLostReason_FailedCreation: reasonStr = "Failed Creation"; break;
+            default: break;
+        }
+        const char* msgStr = message.data ? message.data : "No message";
+        // Destroyed and CallbackCancelled are expected during normal shutdown
+        if (reason == WGPUDeviceLostReason_Destroyed || reason == WGPUDeviceLostReason_CallbackCancelled) {
+            METAGFX_INFO << "WebGPU Device Lost [" << reasonStr << "]: " << msgStr;
+        } else {
+            METAGFX_ERROR << "WebGPU Device Lost [" << reasonStr << "]: " << msgStr;
+        }
+    };
+
+    WGPUDeviceLostCallbackInfo lostCallbackInfo{};
+    lostCallbackInfo.mode = WGPUCallbackMode_AllowSpontaneous;
+    lostCallbackInfo.callback = lostCallback;
+
+    // Uncaptured error callback
+    auto errorCallback = [](WGPUDevice const * /* device */, WGPUErrorType type,
+                            WGPUStringView message, void* /* userdata1 */, void* /* userdata2 */) {
+        const char* typeStr = "Unknown";
+        switch (type) {
+            case WGPUErrorType_NoError: typeStr = "No Error"; break;
+            case WGPUErrorType_Validation: typeStr = "Validation"; break;
+            case WGPUErrorType_OutOfMemory: typeStr = "Out of Memory"; break;
+            case WGPUErrorType_Internal: typeStr = "Internal"; break;
+            case WGPUErrorType_Unknown: typeStr = "Unknown"; break;
+            default: break;
+        }
+        const char* msgStr = message.data ? message.data : "No message";
+        METAGFX_ERROR << "WebGPU Error [" << typeStr << "]: " << msgStr;
+    };
+
+    WGPUUncapturedErrorCallbackInfo errorCallbackInfo{};
+    errorCallbackInfo.callback = errorCallback;
+
+    // Create device descriptor
+    WGPUQueueDescriptor queueDesc{};
+    queueDesc.label = WGPU_STRING_VIEW_INIT;
+
+    WGPUDeviceDescriptor deviceDesc{};
     deviceDesc.requiredLimits = &requiredLimits;
-    deviceDesc.defaultQueue.label = "Default Queue";
+    deviceDesc.defaultQueue = queueDesc;
+    deviceDesc.deviceLostCallbackInfo = lostCallbackInfo;
+    deviceDesc.uncapturedErrorCallbackInfo = errorCallbackInfo;
 
+    // Modern Dawn API uses callback info structure
     auto callback = [](WGPURequestDeviceStatus status, WGPUDevice device,
-                       char const* message, void* userdata) {
-        auto* data = static_cast<DeviceRequestData*>(userdata);
+                       WGPUStringView message, void* userdata1, void* /* userdata2 */) {
+        auto* data = static_cast<DeviceRequestData*>(userdata1);
 
         if (status == WGPURequestDeviceStatus_Success) {
             *data->device = wgpu::Device::Acquire(device);
             data->success = true;
         } else {
-            METAGFX_ERROR << "Failed to request device: " << (message ? message : "Unknown error");
+            const char* msgStr = message.data ? message.data : "Unknown error";
+            METAGFX_ERROR << "Failed to request device: " << msgStr;
         }
 
         data->done = true;
     };
 
-    m_Context.adapter.RequestDevice(&deviceDesc, callback, &data);
+    WGPURequestDeviceCallbackInfo callbackInfo{};
+    callbackInfo.mode = WGPUCallbackMode_AllowProcessEvents;
+    callbackInfo.callback = callback;
+    callbackInfo.userdata1 = &data;
+
+    WGPUAdapter adapter = m_Context.adapter.Get();
+    wgpuAdapterRequestDevice(adapter, &deviceDesc, callbackInfo);
 
     // Wait for callback (blocking on native platforms)
 #ifndef __EMSCRIPTEN__
+    WGPUInstance instance = m_Context.instance.Get();
     while (!data.done) {
-#ifdef __EMSCRIPTEN__
-        emscripten_sleep(1);
-#endif
+        wgpuInstanceProcessEvents(instance);
     }
 #endif
 
     if (!data.success || !m_Context.device) {
-        WEBGPU_LOG_ERROR("Failed to obtain WebGPU device");
+        METAGFX_ERROR << "Failed to obtain WebGPU device";
         throw std::runtime_error("Failed to obtain WebGPU device");
     }
 
@@ -188,24 +253,9 @@ void WebGPUDevice::RequestDevice() {
     m_Context.queue = m_Context.device.GetQueue();
 
     if (!m_Context.queue) {
-        WEBGPU_LOG_ERROR("Failed to obtain device queue");
+        METAGFX_ERROR << "Failed to obtain device queue";
         throw std::runtime_error("Failed to obtain device queue");
     }
-
-    // Set error callback for device
-    m_Context.device.SetUncapturedErrorCallback(
-        [](WGPUErrorType type, char const* message, void* userdata) {
-            const char* typeStr = "Unknown";
-            switch (type) {
-                case WGPUErrorType_Validation: typeStr = "Validation"; break;
-                case WGPUErrorType_OutOfMemory: typeStr = "Out of Memory"; break;
-                case WGPUErrorType_DeviceLost: typeStr = "Device Lost"; break;
-                default: break;
-            }
-            METAGFX_ERROR << "WebGPU Error [" << typeStr << "]: " << message;
-        },
-        nullptr
-    );
 
     METAGFX_INFO << "WebGPU device and queue created";
 }
@@ -214,7 +264,7 @@ void WebGPUDevice::CreateSurface(SDL_Window* window) {
     m_Context.surface = CreateWebGPUSurfaceFromWindow(window, m_Context.instance);
 
     if (!m_Context.surface) {
-        WEBGPU_LOG_ERROR("Failed to create WebGPU surface");
+        METAGFX_ERROR << "Failed to create WebGPU surface";
         throw std::runtime_error("Failed to create WebGPU surface");
     }
 
@@ -222,13 +272,22 @@ void WebGPUDevice::CreateSurface(SDL_Window* window) {
 }
 
 void WebGPUDevice::QueryDeviceCapabilities() {
-    // Query supported limits
-    wgpu::SupportedLimits limits{};
-    m_Context.device.GetLimits(&limits);
+    // Query supported limits using modern Dawn API
+    WGPULimits limits{};
+    WGPUDevice device = m_Context.device.Get();
+    WGPUStatus status = wgpuDeviceGetLimits(device, &limits);
 
-    m_Context.maxBindGroups = limits.limits.maxBindGroups;
-    m_Context.maxUniformBufferBindingSize = limits.limits.maxUniformBufferBindingSize;
-    m_Context.minUniformBufferOffsetAlignment = limits.limits.minUniformBufferOffsetAlignment;
+    if (status != WGPUStatus_Success) {
+        METAGFX_ERROR << "Failed to query device limits";
+        // Use default conservative limits
+        m_Context.maxBindGroups = 4;
+        m_Context.maxUniformBufferBindingSize = 65536;
+        m_Context.minUniformBufferOffsetAlignment = 256;
+    } else {
+        m_Context.maxBindGroups = limits.maxBindGroups;
+        m_Context.maxUniformBufferBindingSize = static_cast<uint32>(limits.maxUniformBufferBindingSize);
+        m_Context.minUniformBufferOffsetAlignment = limits.minUniformBufferOffsetAlignment;
+    }
 
     // Query features (these would need to be checked individually in Dawn)
     // For now, we'll set conservative defaults

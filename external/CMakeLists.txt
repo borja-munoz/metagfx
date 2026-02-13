@@ -75,6 +75,14 @@ if(METAGFX_USE_WEBGPU)
 endif()
 
 add_library(imgui_backends STATIC ${IMGUI_BACKEND_SOURCES})
+
+# On macOS with Dawn, compile WebGPU backend as Objective-C++ without ARC
+if(METAGFX_USE_WEBGPU AND APPLE)
+    set_source_files_properties(${IMGUI_DIR}/backends/imgui_impl_wgpu.cpp
+        PROPERTIES
+            LANGUAGE OBJCXX
+            COMPILE_FLAGS "-fno-objc-arc")
+endif()
 target_include_directories(imgui_backends
     PUBLIC
         ${IMGUI_DIR}
@@ -99,6 +107,12 @@ if(METAGFX_USE_METAL)
     # Enable Metal C++ bindings for ImGui and add metal-cpp include path
     target_compile_definitions(imgui_backends PUBLIC IMGUI_IMPL_METAL_CPP)
     target_include_directories(imgui_backends PRIVATE ${CMAKE_SOURCE_DIR}/external/metal-cpp)
+endif()
+
+# Link Dawn for ImGui if enabled
+if(METAGFX_USE_WEBGPU)
+    target_include_directories(imgui_backends PUBLIC /Users/Borja/dev/dawn/dawn_install/include)
+    target_link_libraries(imgui_backends PUBLIC /Users/Borja/dev/dawn/dawn_install/lib/libwebgpu_dawn.a)
 endif()
 
 set_target_properties(imgui_backends PROPERTIES FOLDER "External")
@@ -179,20 +193,10 @@ if(METAGFX_USE_WEBGPU)
     message(STATUS "  Found Dawn at: ${dawn_DIR}")
     message(STATUS "  Dawn version: ${dawn_VERSION}")
 
-    # Add Dawn include directories to ImGui WebGPU backend
-    target_include_directories(imgui_backends
-        PRIVATE
-            /Users/Borja/dev/dawn/dawn_install/include  # Dawn headers location
-    )
-
-    # Define IMGUI_IMPL_WEBGPU_BACKEND_DAWN for ImGui
-    target_compile_definitions(imgui_backends
-        PRIVATE
-            IMGUI_IMPL_WEBGPU_BACKEND_DAWN=1
-    )
-
-    # Link ImGui to Dawn
-    target_link_libraries(imgui_backends PUBLIC webgpu_dawn)
+    # ImGui WebGPU backend configuration
+    target_include_directories(imgui_backends PRIVATE /Users/Borja/dev/dawn/dawn_install/include)
+    target_compile_definitions(imgui_backends PRIVATE IMGUI_IMPL_WEBGPU_BACKEND_DAWN=1)
+    target_link_libraries(imgui_backends PRIVATE /Users/Borja/dev/dawn/dawn_install/lib/libwebgpu_dawn.a)
 
     if(TARGET dawn_platform)
         set_target_properties(dawn_platform PROPERTIES FOLDER "External/Dawn")
@@ -203,8 +207,4 @@ if(METAGFX_USE_WEBGPU)
     if(TARGET libtint)
         set_target_properties(libtint PROPERTIES FOLDER "External/Dawn/Tint")
     endif()
-
-    # Link Dawn to ImGui WebGPU backend
-    target_link_libraries(imgui_backends PUBLIC webgpu_dawn)
-    target_include_directories(imgui_backends PRIVATE ${dawn_SOURCE_DIR}/include)
 endif()

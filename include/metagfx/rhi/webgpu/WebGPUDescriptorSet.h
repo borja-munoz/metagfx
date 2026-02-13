@@ -6,6 +6,7 @@
 #include "metagfx/rhi/DescriptorSet.h"
 #include "WebGPUTypes.h"
 #include <vector>
+#include <unordered_map>
 
 namespace metagfx {
 namespace rhi {
@@ -17,6 +18,7 @@ public:
 
     void UpdateBuffer(uint32 binding, Ref<Buffer> buffer) override;
     void UpdateTexture(uint32 binding, Ref<Texture> texture, Ref<Sampler> sampler) override;
+    void Update() override;
 
     void* GetNativeHandle(uint32 frameIndex) const override;
     void* GetNativeLayout() const override;
@@ -24,9 +26,6 @@ public:
     // WebGPU-specific
     wgpu::BindGroup GetBindGroup() const { return m_BindGroup; }
     wgpu::BindGroupLayout GetBindGroupLayout() const { return m_BindGroupLayout; }
-
-    // Rebuild the bind group after updates
-    void Update();
 
 private:
     WebGPUContext& m_Context;
@@ -42,6 +41,10 @@ private:
         Ref<Sampler> sampler;
     };
     std::vector<BindingInfo> m_Bindings;
+
+    // Map from texture binding to its corresponding sampler binding
+    // Needed because WebGPU separates textures and samplers
+    std::unordered_map<uint32, uint32> m_SamplerBindings;
 };
 
 } // namespace rhi

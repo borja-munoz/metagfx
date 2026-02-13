@@ -81,7 +81,9 @@ void VulkanBuffer::CopyData(const void* data, uint64 size, uint64 offset) {
     range.size = size;
     VK_CHECK(vkFlushMappedMemoryRanges(m_Context.device, 1, &range));
 
-    Unmap();
+    // NOTE: Keep buffer persistently mapped (like Metal does)
+    // Only unmap in destructor
+    // Unmap();
 }
 
 } // namespace rhi

@@ -38,7 +38,9 @@ layout(binding = 13) uniform ShadowUBO {
     mat4 lightSpaceMatrix;  // Transform from world space to light space
     mat4 model;             // Model matrix (not used in fragment shader, but needed for alignment)
     float shadowBias;       // Bias to prevent shadow acne
-    float padding[3];       // Padding for alignment
+    float padding1;         // Padding for alignment
+    float padding2;
+    float padding3;
 } shadow;
 
 // Light data structure (64 bytes, matches CPU struct)
@@ -49,16 +51,21 @@ struct LightData {
     vec4 spotAngles;         // x=innerAngle, y=outerAngle, z=attConst, w=attLinear
 };
 
-// Light buffer storage (set 0, binding = 3) - CHANGED TO STORAGE BUFFER for MoltenVK compatibility
-// CRITICAL: Must match CPU struct exactly - uint lightCount + uint padding[3]
-layout(set = 0, binding = 3, std430) readonly buffer LightBuffer {
+// Light buffer (binding = 3)
+// Vulkan/Metal: Uniform buffer with std140 layout
+// WebGPU: Storage buffer with std430 layout (handled by buffer type in C++)
+// CRITICAL: Must match CPU struct exactly - uint lightCount + uint padding1/2/3
+layout(binding = 3, std140) uniform LightBuffer {
     uint lightCount;
-    uint padding[3];
+    uint padding1;
+    uint padding2;
+    uint padding3;
     LightData lights[16];
 } lightBuffer;
 
-// Push constants for camera position, material flags, exposure, and IBL toggle
-layout(push_constant) uniform PushConstants {
+// Uniform buffer for camera position, material flags, exposure, and IBL toggle
+// (converted from push constants for WebGPU compatibility)
+layout(binding = 14) uniform PushConstants {
     vec4 cameraPosition;
     uint materialFlags;
     float exposure;
@@ -199,18 +206,20 @@ float calculateShadow(vec3 fragPos) {
     // Clamp depth to [0, 1] range
     currentDepth = clamp(currentDepth, 0.0, 1.0);
 
-    // PCF with 3x3 kernel for soft shadows
+    // PCF with 3x3 kernel for soft shadows (manually unrolled for WGSL compatibility)
     float shadowFactor = 0.0;
     vec2 texelSize = 1.0 / textureSize(shadowMapSampler, 0);
 
-    for (int x = -1; x <= 1; x++) {
-        for (int y = -1; y <= 1; y++) {
-            vec2 offset = vec2(x, y) * texelSize;
-            vec3 sampleCoord = vec3(projCoords.xy + offset, currentDepth);
-            // texture() with sampler2DShadow performs hardware PCF comparison
-            shadowFactor += texture(shadowMapSampler, sampleCoord);
-        }
-    }
+    // Unrolled PCF kernel to ensure uniform control flow for WGSL
+    shadowFactor += texture(shadowMapSampler, vec3(projCoords.xy + vec2(-1, -1) * texelSize, currentDepth));
+    shadowFactor += texture(shadowMapSampler, vec3(projCoords.xy + vec2(-1,  0) * texelSize, currentDepth));
+    shadowFactor += texture(shadowMapSampler, vec3(projCoords.xy + vec2(-1,  1) * texelSize, currentDepth));
+    shadowFactor += texture(shadowMapSampler, vec3(projCoords.xy + vec2( 0, -1) * texelSize, currentDepth));
+    shadowFactor += texture(shadowMapSampler, vec3(projCoords.xy + vec2( 0,  0) * texelSize, currentDepth));
+    shadowFactor += texture(shadowMapSampler, vec3(projCoords.xy + vec2( 0,  1) * texelSize, currentDepth));
+    shadowFactor += texture(shadowMapSampler, vec3(projCoords.xy + vec2( 1, -1) * texelSize, currentDepth));
+    shadowFactor += texture(shadowMapSampler, vec3(projCoords.xy + vec2( 1,  0) * texelSize, currentDepth));
+    shadowFactor += texture(shadowMapSampler, vec3(projCoords.xy + vec2( 1,  1) * texelSize, currentDepth));
     shadowFactor /= 9.0;  // Average the 9 samples
 
     return shadowFactor;
@@ -312,6 +321,10 @@ vec3 calculatePBRLighting(LightData light, vec3 fragPos, vec3 normal, vec3 viewD
 }
 
 void main() {
+    // CRITICAL: Calculate shadow factor FIRST, before any conditional branches
+    // WGSL requires textureSampleCompare to be in uniform control flow
+    float shadowFactor = calculateShadow(fragPosition);
+
     // Sample albedo (texture or material property)
     vec3 albedo;
     if ((pushConstants.materialFlags & (1u << 0)) != 0u) {  // HasAlbedoMap
@@ -373,9 +386,10 @@ void main() {
     // For metals, F0 is the albedo color
     vec3 F0 = mix(vec3(0.04), albedo, metallic);
 
-    // Calculate shadow factor (for directional light shadows)
-    // If shadows are disabled, use 1.0 (fully lit)
-    float shadowFactor = (pushConstants.enableShadows != 0u) ? calculateShadow(fragPosition) : 1.0;
+    // Override shadow factor if shadows are disabled
+    if (pushConstants.enableShadows == 0u) {
+        shadowFactor = 1.0;
+    }
 
     // Accumulate lighting from all lights using PBR
     vec3 Lo = vec3(0.0);
@@ -573,8 +587,8 @@ void main() {
     } else if (pushConstants.shadowDebugMode == 5u) {
         // Mode 5: Show just the shadow factor as grayscale (simpler than mode 1)
         // This helps see if ANY shadowing is happening
-        float sf = (pushConstants.enableShadows != 0u) ? calculateShadow(fragPosition) : 1.0;
-        outColor = vec4(vec3(sf), 1.0);
+        // Use the shadow factor calculated at the start of main()
+        outColor = vec4(vec3(shadowFactor), 1.0);
         return;
     } else if (pushConstants.shadowDebugMode == 6u) {
         // Mode 6: Show detailed shadow sampling debug info

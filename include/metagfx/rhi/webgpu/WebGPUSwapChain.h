@@ -24,16 +24,14 @@ public:
     uint32 GetHeight() const override { return m_Height; }
     Format GetFormat() const override { return m_Format; }
 
-    // WebGPU-specific
-    wgpu::SwapChain GetHandle() const { return m_SwapChain; }
-
 private:
-    void CreateSwapChain();
+    void ConfigureSurface();
 
     WebGPUContext& m_Context;
     SDL_Window* m_Window;
 
-    wgpu::SwapChain m_SwapChain = nullptr;
+    // Modern Dawn API uses Surface::Configure instead of SwapChain
+    wgpu::Texture m_CurrentSurfaceTexture = nullptr;
     Ref<Texture> m_CurrentTexture;
 
     uint32 m_Width = 0;

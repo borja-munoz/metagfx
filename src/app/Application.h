@@ -30,7 +30,7 @@ namespace rhi {
     class Sampler;
     class DescriptorSet;
 }
-
+class Material;
 class ShadowMap;
 
 struct ApplicationConfig {
@@ -62,6 +62,7 @@ private:
     void LoadModel(const std::string& path);
     void LoadNextModel();
     void LoadPreviousModel();
+    void UpdateModelDescriptorTextures(Material* material);
     void ProcessEvents();
     void Update(float deltaTime);
     void Render();
@@ -104,10 +105,15 @@ private:
     Ref<rhi::Buffer> m_MaterialBuffers[2];  // Double buffering for material
     Ref<rhi::Buffer> m_GroundPlaneMaterialBuffer;  // Dedicated material buffer for ground plane
     Ref<rhi::Buffer> m_ShadowUniformBuffer;  // Shadow UBO (light space matrix + bias)
-    Ref<rhi::DescriptorSet> m_DescriptorSet;
-    Ref<rhi::DescriptorSet> m_SkyboxDescriptorSet;  // Separate descriptor set for skybox
-    Ref<rhi::DescriptorSet> m_ShadowDescriptorSet;  // Descriptor set for shadow pass
-    Ref<rhi::DescriptorSet> m_GroundPlaneDescriptorSet;  // Separate descriptor set for ground plane
+
+    // Push constant buffers (WebGPU requires these as uniform buffers)
+    // Double-buffered to prevent race conditions: CPU writes frame N while GPU reads frame N-1
+    Ref<rhi::Buffer> m_ModelPushConstantBuffer[2];  // Push constants for model shader (per-frame)
+    Ref<rhi::Buffer> m_SkyboxPushConstantBuffer;    // Push constants for skybox shader
+    Ref<rhi::DescriptorSet> m_DescriptorSet[2];  // Double-buffered (frame 0/1 use different uniform buffers)
+    Ref<rhi::DescriptorSet> m_SkyboxDescriptorSet[2];  // Double-buffered for skybox
+    Ref<rhi::DescriptorSet> m_ShadowDescriptorSet;  // Shadow pass (no double buffering needed)
+    Ref<rhi::DescriptorSet> m_GroundPlaneDescriptorSet[2];  // Double-buffered for ground plane
     uint32 m_CurrentFrame = 0;
 
     // Texture resources

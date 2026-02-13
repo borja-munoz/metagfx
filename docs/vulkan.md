@@ -48,6 +48,47 @@ A future milestone may add dynamic rendering support as an optional code path, u
 - No descriptor sets yet (will add in Phase 2)
 - Simple rasterization state
 
+### Double-Buffered Uniform Buffers (Push Constants)
+
+A critical rule for any buffer that is bound to **both** descriptor sets (frame 0 and frame 1) and written by the CPU every frame is that it must be **double-buffered** — one copy per frame in flight.
+
+**Problem**: If a single `VulkanBuffer` is referenced by both `m_DescriptorSet[0]` and `m_DescriptorSet[1]`, the CPU may write new data to it while the GPU is still reading the old data for the previous frame. This creates a race condition.
+
+**Symptoms**: Intermittent flickering correlated with moving the camera or changing model parameters. The bug is invisible when the written value is constant across frames (e.g., `materialFlags = 0` for untextured models) but visible when it changes (e.g., texture enable bitmask for complex materials).
+
+**Solution**: Create one buffer per frame and bind each to its corresponding descriptor set:
+
+```cpp
+// Application.h
+Ref<rhi::Buffer> m_ModelPushConstantBuffer[2];  // One per frame
+
+// Application.cpp - creation
+for (int frameIndex = 0; frameIndex < 2; ++frameIndex) {
+    m_ModelPushConstantBuffer[frameIndex] = m_Device->CreateBuffer(desc);
+    // Each descriptor set gets its own buffer
+    m_DescriptorSet[frameIndex]->BindUniformBuffer(
+        BINDING(api, ModelBindings::PUSH_CONSTANTS),
+        m_ModelPushConstantBuffer[frameIndex], 0, sizeof(ModelPushConstants));
+}
+
+// Application.cpp - per-frame write
+m_ModelPushConstantBuffer[m_CurrentFrame]->CopyData(&modelPushConst, sizeof(ModelPushConstants));
+```
+
+**Rule of thumb**: Any uniform buffer that contains per-frame mutable data and is referenced by a per-frame descriptor set must be double-buffered.
+
+### Frame Counter Synchronization
+
+`VulkanSwapChain` maintains its own `m_CurrentFrame` counter, which it advances **inside** `Present()` before returning. The application's `m_CurrentFrame` must be kept in sync with the swap chain's counter — not advanced independently — to avoid using the wrong descriptor set or buffer slot.
+
+```cpp
+// After Present(), read the swap chain's updated counter
+auto vkSwapChain = std::static_pointer_cast<rhi::VulkanSwapChain>(swapChain);
+m_CurrentFrame = vkSwapChain->GetCurrentFrame();
+```
+
+This ensures the application always uses the same frame index as the swap chain's fence/semaphore tracking.
+
 ## Vulkan Backend Classes
 
 1. **VulkanDevice** - Main device implementation

@@ -24,6 +24,7 @@ public:
     // DescriptorSet interface implementation
     void UpdateBuffer(uint32 binding, Ref<Buffer> buffer) override;
     void UpdateTexture(uint32 binding, Ref<Texture> texture, Ref<Sampler> sampler) override;
+    void Update() override;
     void* GetNativeHandle(uint32 frameIndex) const override;
     void* GetNativeLayout() const override;
 

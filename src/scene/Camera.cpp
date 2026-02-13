@@ -6,9 +6,10 @@
 
 namespace metagfx {
 
-Camera::Camera(float fov, float aspectRatio, float nearPlane, float farPlane)
-    : m_FOV(fov), m_AspectRatio(aspectRatio), m_NearPlane(nearPlane), m_FarPlane(farPlane) {
-    
+Camera::Camera(float fov, float aspectRatio, float nearPlane, float farPlane, bool flipY)
+    : m_FlipY(flipY)
+    , m_FOV(fov), m_AspectRatio(aspectRatio), m_NearPlane(nearPlane), m_FarPlane(farPlane) {
+
     SetPerspective(fov, aspectRatio, nearPlane, farPlane);
     UpdateVectors();
     UpdateViewMatrix();
@@ -20,15 +21,18 @@ void Camera::SetPerspective(float fov, float aspectRatio, float nearPlane, float
     m_AspectRatio = aspectRatio;
     m_NearPlane = nearPlane;
     m_FarPlane = farPlane;
-    
+
     m_ProjectionMatrix = glm::perspective(glm::radians(fov), aspectRatio, nearPlane, farPlane);
-    
+
     // GLM was originally designed for OpenGL, where the Y coordinate of the clip coordinates is inverted
-    // For Vulkan, we need to flip the Y axis
-    m_ProjectionMatrix[1][1] *= -1;
+    // Vulkan and Metal use Y-down NDC, so we flip the Y axis
+    // WebGPU uses Y-up NDC (like OpenGL), so we don't flip
+    if (m_FlipY) {
+        m_ProjectionMatrix[1][1] *= -1;
+    }
 }
 
-void Camera::SetOrthographic(float left, float right, float bottom, float top, 
+void Camera::SetOrthographic(float left, float right, float bottom, float top,
                             float nearPlane, float farPlane) {
     m_ProjectionType = CameraProjection::Orthographic;
     m_OrthoLeft = left;
@@ -37,9 +41,13 @@ void Camera::SetOrthographic(float left, float right, float bottom, float top,
     m_OrthoTop = top;
     m_NearPlane = nearPlane;
     m_FarPlane = farPlane;
-    
+
     m_ProjectionMatrix = glm::ortho(left, right, bottom, top, nearPlane, farPlane);
-    m_ProjectionMatrix[1][1] *= -1; // Flip Y for Vulkan
+
+    // Flip Y for Vulkan and Metal (Y-down NDC), but not for WebGPU (Y-up NDC)
+    if (m_FlipY) {
+        m_ProjectionMatrix[1][1] *= -1;
+    }
 }
 
 void Camera::SetAspectRatio(float aspectRatio) {

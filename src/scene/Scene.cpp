@@ -38,13 +38,18 @@ void Scene::ClearLights() {
     m_Lights.clear();
 }
 
-void Scene::InitializeLightBuffer(rhi::GraphicsDevice* device) {
+void Scene::InitializeLightBuffer(rhi::GraphicsDevice* device, rhi::GraphicsAPI api) {
     m_Device = device;
 
     // Create light buffer (1040 bytes: count + padding + 16 lights)
     rhi::BufferDesc bufferDesc{};
     bufferDesc.size = sizeof(LightBuffer);
+
+    // Use uniform buffer for all backends - the shader declares lightBuffer as uniform (std140)
+    // and the size (1040 bytes) fits within WebGPU's 65536-byte uniform buffer limit
     bufferDesc.usage = rhi::BufferUsage::Uniform;
+    METAGFX_INFO << "Light buffer: Using UNIFORM buffer";
+
     bufferDesc.memoryUsage = rhi::MemoryUsage::CPUToGPU;
 
     m_LightBuffer = m_Device->CreateBuffer(bufferDesc);

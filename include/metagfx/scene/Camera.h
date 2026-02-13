@@ -16,15 +16,17 @@ enum class CameraProjection {
 
 class Camera {
 public:
-    Camera(float fov = 45.0f, float aspectRatio = 16.0f / 9.0f, 
-           float nearPlane = 0.1f, float farPlane = 100.0f);
+    Camera(float fov = 45.0f, float aspectRatio = 16.0f / 9.0f,
+           float nearPlane = 0.1f, float farPlane = 100.0f,
+           bool flipY = true);
     ~Camera() = default;
 
     // Projection
     void SetPerspective(float fov, float aspectRatio, float nearPlane, float farPlane);
-    void SetOrthographic(float left, float right, float bottom, float top, 
+    void SetOrthographic(float left, float right, float bottom, float top,
                         float nearPlane, float farPlane);
     void SetAspectRatio(float aspectRatio);
+    void SetFlipY(bool flipY) { m_FlipY = flipY; }
     
     // Transform
     void SetPosition(const glm::vec3& position);
@@ -72,6 +74,9 @@ public:
 private:
     void UpdateViewMatrix();
     void UpdateVectors();
+
+    // Y-axis flip for projection (Vulkan/Metal need flip, WebGPU doesn't)
+    bool m_FlipY = true;
 
     // Projection parameters
     CameraProjection m_ProjectionType = CameraProjection::Perspective;

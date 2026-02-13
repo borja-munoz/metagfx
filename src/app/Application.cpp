@@ -2,6 +2,7 @@
 // src/app/Application.cpp
 // ============================================================================
 #include "Application.h"
+#include "BindingLayout.h"
 #include "metagfx/core/Logger.h"
 #include "metagfx/rhi/Buffer.h"
 #include "metagfx/rhi/CommandBuffer.h"
@@ -40,6 +41,12 @@
 #endif
 #ifdef METAGFX_USE_METAL
 #include <imgui_impl_metal.h>
+#endif
+#ifdef METAGFX_USE_WEBGPU
+#include "metagfx/rhi/webgpu/WebGPUDevice.h"
+#include "metagfx/rhi/webgpu/WebGPUCommandBuffer.h"
+#include <imgui_impl_wgpu.h>
+#include <webgpu/webgpu.h>
 #endif
 #include <fstream>
 
@@ -115,12 +122,18 @@ void Application::Init() {
 
     METAGFX_INFO << "Graphics device created: " << m_Device->GetDeviceInfo().deviceName;
 
-    // Create camera
+    // Create camera with appropriate Y-axis flip based on graphics API
+    // Vulkan and Metal use Y-down NDC (flip required)
+    // WebGPU uses Y-up NDC like OpenGL (no flip)
+    bool flipY = (m_Config.graphicsAPI == rhi::GraphicsAPI::Vulkan ||
+                  m_Config.graphicsAPI == rhi::GraphicsAPI::Metal);
+
     m_Camera = std::make_unique<Camera>(
         45.0f,
         static_cast<float>(m_Config.width) / static_cast<float>(m_Config.height),
         0.1f,
-        100.0f
+        100.0f,
+        flipY
     );
     // Set up orbital camera centered on origin
     m_Camera->SetPosition(glm::vec3(0.0f, 1.0f, 8.0f));
@@ -163,6 +176,58 @@ void Application::Init() {
     shadowBufferDesc.usage = BufferUsage::Uniform;
     shadowBufferDesc.memoryUsage = MemoryUsage::CPUToGPU;
     m_ShadowUniformBuffer = m_Device->CreateBuffer(shadowBufferDesc);
+
+    // Create push constant buffers (for WebGPU compatibility)
+    // Model push constants: cameraPosition (vec4) + materialFlags (uint) + exposure (float) + enableIBL (uint) + iblIntensity (float) + shadowDebugMode (uint) + enableShadows (uint)
+    // Total: 16 + 4 + 4 + 4 + 4 + 4 + 4 = 40 bytes
+    BufferDesc modelPushConstDesc{};
+    modelPushConstDesc.size = 64;  // Aligned to 64 bytes for safety
+    modelPushConstDesc.usage = BufferUsage::Uniform;
+    modelPushConstDesc.memoryUsage = MemoryUsage::CPUToGPU;
+    // Create double-buffered push constant buffers (one per frame in flight)
+    // This prevents race conditions where CPU writes frame N while GPU reads frame N-1
+    m_ModelPushConstantBuffer[0] = m_Device->CreateBuffer(modelPushConstDesc);
+    m_ModelPushConstantBuffer[1] = m_Device->CreateBuffer(modelPushConstDesc);
+
+    // Initialize model push constants with default values
+    // NOTE: Must match shader layout exactly (40 bytes, no padding)
+    struct ModelPushConstants {
+        glm::vec4 cameraPosition;    // 16 bytes
+        uint32_t materialFlags;      // 4 bytes
+        float exposure;              // 4 bytes
+        uint32_t enableIBL;          // 4 bytes
+        float iblIntensity;          // 4 bytes
+        uint32_t shadowDebugMode;    // 4 bytes
+        uint32_t enableShadows;      // 4 bytes
+    };  // Total: 40 bytes
+    ModelPushConstants initialModelPushConst{};
+    initialModelPushConst.cameraPosition = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
+    initialModelPushConst.materialFlags = 0;
+    initialModelPushConst.exposure = 1.0f;
+    initialModelPushConst.enableIBL = 0;
+    initialModelPushConst.iblIntensity = 1.0f;
+    initialModelPushConst.shadowDebugMode = 0;  // No debug mode
+    initialModelPushConst.enableShadows = 0;
+    m_ModelPushConstantBuffer[0]->CopyData(&initialModelPushConst, sizeof(ModelPushConstants));
+    m_ModelPushConstantBuffer[1]->CopyData(&initialModelPushConst, sizeof(ModelPushConstants));
+
+    // Skybox push constants: exposure (float) + lod (float)
+    // Total: 4 + 4 = 8 bytes
+    BufferDesc skyboxPushConstDesc{};
+    skyboxPushConstDesc.size = 16;  // Aligned to 16 bytes
+    skyboxPushConstDesc.usage = BufferUsage::Uniform;
+    skyboxPushConstDesc.memoryUsage = MemoryUsage::CPUToGPU;
+    m_SkyboxPushConstantBuffer = m_Device->CreateBuffer(skyboxPushConstDesc);
+
+    // Initialize skybox push constants with default values
+    struct SkyboxPushConstants {
+        float exposure;
+        float lod;
+    };
+    SkyboxPushConstants initialSkyboxPushConst{};
+    initialSkyboxPushConst.exposure = 1.0f;
+    initialSkyboxPushConst.lod = 0.0f;
+    m_SkyboxPushConstantBuffer->CopyData(&initialSkyboxPushConst, sizeof(SkyboxPushConstants));
 
     // Create shared sampler
     rhi::SamplerDesc samplerDesc{};
@@ -294,7 +359,7 @@ void Application::Init() {
 
     // Create scene and initialize light buffer
     m_Scene = std::make_unique<Scene>();
-    m_Scene->InitializeLightBuffer(m_Device.get());
+    m_Scene->InitializeLightBuffer(m_Device.get(), m_Config.graphicsAPI);
 
     // Create test lights
     CreateTestLights();
@@ -305,59 +370,73 @@ void Application::Init() {
     // Create shadow map (2048x2048 default resolution)
     m_ShadowMap = std::make_unique<ShadowMap>(m_Device, 2048, 2048);
 
-    // Create descriptor set with 14 bindings (added shadow map sampler and shadow UBO)
+    // Create descriptor set with 15 bindings for model rendering
+    // WebGPU uses sparse layout with gaps for auto-inserted samplers
+    // Vulkan/Metal use dense layout with combined image samplers
     using rhi::DescriptorType;
     using rhi::ShaderStage;
     using rhi::DescriptorBindingDesc;
 
-    std::vector<DescriptorBindingDesc> bindings = {
-        { 0, DescriptorType::UniformBuffer, ShaderStage::Vertex, m_UniformBuffers[0], nullptr, nullptr },  // MVP matrices
-        { 1, DescriptorType::UniformBuffer, ShaderStage::Fragment, m_MaterialBuffers[0], nullptr, nullptr },  // Material
-        { 2, DescriptorType::SampledTexture, ShaderStage::Fragment, nullptr, m_DefaultTexture, m_LinearRepeatSampler },  // Albedo
-        { 3, DescriptorType::StorageBuffer, ShaderStage::Fragment, m_Scene->GetLightBuffer(), nullptr, nullptr },  // Lights
-        { 4, DescriptorType::SampledTexture, ShaderStage::Fragment, nullptr, m_DefaultNormalMap, m_LinearRepeatSampler },  // Normal
-        { 5, DescriptorType::SampledTexture, ShaderStage::Fragment, nullptr, m_DefaultWhiteTexture, m_LinearRepeatSampler },  // Metallic
-        { 6, DescriptorType::SampledTexture, ShaderStage::Fragment, nullptr, m_DefaultWhiteTexture, m_LinearRepeatSampler },  // Roughness
-        { 7, DescriptorType::SampledTexture, ShaderStage::Fragment, nullptr, m_DefaultWhiteTexture, m_LinearRepeatSampler },  // AO
-        { 8, DescriptorType::SampledTexture, ShaderStage::Fragment, nullptr, m_IrradianceMap, m_CubemapSampler },  // Irradiance
-        { 9, DescriptorType::SampledTexture, ShaderStage::Fragment, nullptr, m_PrefilteredMap, m_CubemapSampler },  // Prefiltered
-        { 10, DescriptorType::SampledTexture, ShaderStage::Fragment, nullptr, m_BRDF_LUT, m_LinearRepeatSampler },  // BRDF LUT
-        { 11, DescriptorType::SampledTexture, ShaderStage::Fragment, nullptr, m_DefaultBlackTexture, m_LinearRepeatSampler },  // Emissive
-        { 12, DescriptorType::SampledTexture, ShaderStage::Fragment, nullptr, m_ShadowMap->GetDepthTexture(), m_ShadowMap->GetSampler() },  // Shadow map
-        { 13, DescriptorType::UniformBuffer, ShaderStage::Fragment, m_ShadowUniformBuffer, nullptr, nullptr }  // Shadow UBO
-    };
+    // Use uniform buffer for lights on all backends - the shader declares it as
+    // uniform (std140) and the size (1040 bytes) fits within WebGPU's 65536-byte limit
+    DescriptorType lightBufferType = DescriptorType::UniformBuffer;
 
-    rhi::DescriptorSetDesc descriptorSetDesc;
-    descriptorSetDesc.bindings = bindings;
-    descriptorSetDesc.debugName = "MainDescriptorSet";
-    m_DescriptorSet = m_Device->CreateDescriptorSet(descriptorSetDesc);
+    // Create descriptor sets for each frame (double buffering for Vulkan)
+    for (uint32 frameIndex = 0; frameIndex < 2; frameIndex++) {
+        std::vector<DescriptorBindingDesc> bindings = {
+            { BINDING(m_Config.graphicsAPI, ModelBindings::MVP), DescriptorType::UniformBuffer, ShaderStage::Vertex, m_UniformBuffers[frameIndex], nullptr, nullptr },  // MVP matrices (per-frame buffer)
+            { BINDING(m_Config.graphicsAPI, ModelBindings::MATERIAL), DescriptorType::UniformBuffer, ShaderStage::Fragment, m_MaterialBuffers[frameIndex], nullptr, nullptr },  // Material (per-frame buffer)
+            { BINDING(m_Config.graphicsAPI, ModelBindings::ALBEDO), DescriptorType::SampledTexture, ShaderStage::Fragment, nullptr, m_DefaultTexture, m_LinearRepeatSampler },  // Albedo
+            { BINDING(m_Config.graphicsAPI, ModelBindings::LIGHTS), lightBufferType, ShaderStage::Fragment, m_Scene->GetLightBuffer(), nullptr, nullptr },  // Lights
+            { BINDING(m_Config.graphicsAPI, ModelBindings::NORMAL), DescriptorType::SampledTexture, ShaderStage::Fragment, nullptr, m_DefaultNormalMap, m_LinearRepeatSampler },  // Normal
+            { BINDING(m_Config.graphicsAPI, ModelBindings::METALLIC), DescriptorType::SampledTexture, ShaderStage::Fragment, nullptr, m_DefaultWhiteTexture, m_LinearRepeatSampler },  // Metallic
+            { BINDING(m_Config.graphicsAPI, ModelBindings::ROUGHNESS), DescriptorType::SampledTexture, ShaderStage::Fragment, nullptr, m_DefaultWhiteTexture, m_LinearRepeatSampler },  // Roughness
+            { BINDING(m_Config.graphicsAPI, ModelBindings::AO), DescriptorType::SampledTexture, ShaderStage::Fragment, nullptr, m_DefaultWhiteTexture, m_LinearRepeatSampler },  // AO
+            { BINDING(m_Config.graphicsAPI, ModelBindings::IRRADIANCE), DescriptorType::SampledTexture, ShaderStage::Fragment, nullptr, m_IrradianceMap, m_CubemapSampler },  // Irradiance
+            { BINDING(m_Config.graphicsAPI, ModelBindings::PREFILTERED), DescriptorType::SampledTexture, ShaderStage::Fragment, nullptr, m_PrefilteredMap, m_CubemapSampler },  // Prefiltered
+            { BINDING(m_Config.graphicsAPI, ModelBindings::BRDF_LUT), DescriptorType::SampledTexture, ShaderStage::Fragment, nullptr, m_BRDF_LUT, m_LinearRepeatSampler },  // BRDF LUT
+            { BINDING(m_Config.graphicsAPI, ModelBindings::EMISSIVE), DescriptorType::SampledTexture, ShaderStage::Fragment, nullptr, m_DefaultBlackTexture, m_LinearRepeatSampler },  // Emissive
+            { BINDING(m_Config.graphicsAPI, ModelBindings::SHADOWMAP), DescriptorType::SampledTexture, ShaderStage::Fragment, nullptr, m_ShadowMap->GetDepthTexture(), m_ShadowMap->GetSampler() },  // Shadow map
+            { BINDING(m_Config.graphicsAPI, ModelBindings::SHADOW_UBO), DescriptorType::UniformBuffer, ShaderStage::Fragment, m_ShadowUniformBuffer, nullptr, nullptr },  // Shadow UBO
+            { BINDING(m_Config.graphicsAPI, ModelBindings::PUSH_CONSTANTS), DescriptorType::UniformBuffer, ShaderStage::Fragment, m_ModelPushConstantBuffer[frameIndex], nullptr, nullptr }  // Push constants (double-buffered per frame)
+        };
 
-    // Create ground plane descriptor set (same layout as model, but separate instance)
+        rhi::DescriptorSetDesc descriptorSetDesc;
+        descriptorSetDesc.bindings = bindings;
+        descriptorSetDesc.debugName = "MainDescriptorSet";
+        m_DescriptorSet[frameIndex] = m_Device->CreateDescriptorSet(descriptorSetDesc);
+    }
+
+    // Create ground plane descriptor sets (double buffered, same layout as model but separate instance)
     // We MUST use the same layout because they share the same pipeline
-    std::vector<DescriptorBindingDesc> groundPlaneBindings = bindings;  // Copy all bindings
+    for (uint32 frameIndex = 0; frameIndex < 2; frameIndex++) {
+        std::vector<DescriptorBindingDesc> groundPlaneBindings = {
+            { BINDING(m_Config.graphicsAPI, ModelBindings::MVP), DescriptorType::UniformBuffer, ShaderStage::Vertex, m_UniformBuffers[frameIndex], nullptr, nullptr },  // MVP (per-frame)
+            { BINDING(m_Config.graphicsAPI, ModelBindings::MATERIAL), DescriptorType::UniformBuffer, ShaderStage::Fragment, m_GroundPlaneMaterialBuffer, nullptr, nullptr },  // Ground plane material
+            { BINDING(m_Config.graphicsAPI, ModelBindings::ALBEDO), DescriptorType::SampledTexture, ShaderStage::Fragment, nullptr, m_DefaultWhiteTexture, m_LinearRepeatSampler },  // Albedo
+            { BINDING(m_Config.graphicsAPI, ModelBindings::LIGHTS), lightBufferType, ShaderStage::Fragment, m_Scene->GetLightBuffer(), nullptr, nullptr },  // Lights
+            { BINDING(m_Config.graphicsAPI, ModelBindings::NORMAL), DescriptorType::SampledTexture, ShaderStage::Fragment, nullptr, m_DefaultNormalMap, m_LinearRepeatSampler },  // Normal
+            { BINDING(m_Config.graphicsAPI, ModelBindings::METALLIC), DescriptorType::SampledTexture, ShaderStage::Fragment, nullptr, m_DefaultWhiteTexture, m_LinearRepeatSampler },  // Metallic
+            { BINDING(m_Config.graphicsAPI, ModelBindings::ROUGHNESS), DescriptorType::SampledTexture, ShaderStage::Fragment, nullptr, m_DefaultWhiteTexture, m_LinearRepeatSampler },  // Roughness
+            { BINDING(m_Config.graphicsAPI, ModelBindings::AO), DescriptorType::SampledTexture, ShaderStage::Fragment, nullptr, m_DefaultWhiteTexture, m_LinearRepeatSampler },  // AO
+            { BINDING(m_Config.graphicsAPI, ModelBindings::IRRADIANCE), DescriptorType::SampledTexture, ShaderStage::Fragment, nullptr, m_IrradianceMap, m_CubemapSampler },  // Irradiance
+            { BINDING(m_Config.graphicsAPI, ModelBindings::PREFILTERED), DescriptorType::SampledTexture, ShaderStage::Fragment, nullptr, m_PrefilteredMap, m_CubemapSampler },  // Prefiltered
+            { BINDING(m_Config.graphicsAPI, ModelBindings::BRDF_LUT), DescriptorType::SampledTexture, ShaderStage::Fragment, nullptr, m_BRDF_LUT, m_LinearRepeatSampler },  // BRDF LUT
+            { BINDING(m_Config.graphicsAPI, ModelBindings::EMISSIVE), DescriptorType::SampledTexture, ShaderStage::Fragment, nullptr, m_DefaultBlackTexture, m_LinearRepeatSampler },  // Emissive
+            { BINDING(m_Config.graphicsAPI, ModelBindings::SHADOWMAP), DescriptorType::SampledTexture, ShaderStage::Fragment, nullptr, m_ShadowMap->GetDepthTexture(), m_ShadowMap->GetSampler() },  // Shadow map
+            { BINDING(m_Config.graphicsAPI, ModelBindings::SHADOW_UBO), DescriptorType::UniformBuffer, ShaderStage::Fragment, m_ShadowUniformBuffer, nullptr, nullptr },  // Shadow UBO
+            { BINDING(m_Config.graphicsAPI, ModelBindings::PUSH_CONSTANTS), DescriptorType::UniformBuffer, ShaderStage::Fragment, m_ModelPushConstantBuffer[frameIndex], nullptr, nullptr }  // Push constants (double-buffered per frame)
+        };
 
-    // CRITICAL: Array index corresponds to binding number!
-    // Index 0 = binding 0 (MVP), Index 1 = binding 1 (Material), Index 2 = binding 2 (Albedo), etc.
-
-    // Use dedicated material buffer for ground plane (binding 1 = index 1)
-    groundPlaneBindings[1].buffer = m_GroundPlaneMaterialBuffer;  // Dedicated material buffer
-
-    // Set default textures for ground plane
-    groundPlaneBindings[2].texture = m_DefaultWhiteTexture;   // binding 2: Albedo
-    groundPlaneBindings[4].texture = m_DefaultNormalMap;      // binding 4: Normal
-    groundPlaneBindings[5].texture = m_DefaultWhiteTexture;   // binding 5: Metallic
-    groundPlaneBindings[6].texture = m_DefaultWhiteTexture;   // binding 6: Roughness
-    groundPlaneBindings[7].texture = m_DefaultWhiteTexture;   // binding 7: AO
-    groundPlaneBindings[11].texture = m_DefaultBlackTexture;  // binding 11: Emissive (black = no glow)
-
-    rhi::DescriptorSetDesc groundPlaneDescriptorSetDesc;
-    groundPlaneDescriptorSetDesc.bindings = groundPlaneBindings;
-    groundPlaneDescriptorSetDesc.debugName = "GroundPlaneDescriptorSet";
-    m_GroundPlaneDescriptorSet = m_Device->CreateDescriptorSet(groundPlaneDescriptorSetDesc);
+        rhi::DescriptorSetDesc groundPlaneDescriptorSetDesc;
+        groundPlaneDescriptorSetDesc.bindings = groundPlaneBindings;
+        groundPlaneDescriptorSetDesc.debugName = "GroundPlaneDescriptorSet";
+        m_GroundPlaneDescriptorSet[frameIndex] = m_Device->CreateDescriptorSet(groundPlaneDescriptorSetDesc);
+    }
 
     // Create shadow descriptor set (for shadow pass rendering)
     std::vector<DescriptorBindingDesc> shadowBindings = {
-        { 0, DescriptorType::UniformBuffer, ShaderStage::Vertex, m_ShadowUniformBuffer, nullptr, nullptr }  // Shadow UBO
+        { ShadowBindings::SHADOW_UBO, DescriptorType::UniformBuffer, ShaderStage::Vertex, m_ShadowUniformBuffer, nullptr, nullptr }  // Shadow UBO
     };
 
     rhi::DescriptorSetDesc shadowDescriptorSetDesc;
@@ -365,19 +444,25 @@ void Application::Init() {
     shadowDescriptorSetDesc.debugName = "ShadowDescriptorSet";
     m_ShadowDescriptorSet = m_Device->CreateDescriptorSet(shadowDescriptorSetDesc);
 
-    // Create skybox descriptor set with 2 bindings
-    std::vector<DescriptorBindingDesc> skyboxBindings = {
-        { 0, DescriptorType::UniformBuffer, ShaderStage::Vertex, m_UniformBuffers[0], nullptr, nullptr },  // MVP matrices
-        { 1, DescriptorType::SampledTexture, ShaderStage::Fragment, nullptr, m_EnvironmentMap, m_CubemapSampler }  // Environment cubemap
-    };
+    // Create skybox descriptor sets (double buffered)
+    // Use BINDING() macro to get correct binding numbers per backend
+    // WebGPU uses sparse layout: 0(MVP), 1(env texture), 2(env sampler by Tint), 3(push constants)
+    // Vulkan/Metal use dense layout: 0(MVP), 1(env combined), 2(push constants)
+    for (uint32 frameIndex = 0; frameIndex < 2; frameIndex++) {
+        std::vector<DescriptorBindingDesc> skyboxBindings = {
+            { BINDING(m_Config.graphicsAPI, SkyboxBindings::MVP), DescriptorType::UniformBuffer, ShaderStage::Vertex, m_UniformBuffers[frameIndex], nullptr, nullptr },  // MVP matrices (per-frame buffer)
+            { BINDING(m_Config.graphicsAPI, SkyboxBindings::ENVIRONMENT), DescriptorType::SampledTexture, ShaderStage::Fragment, nullptr, m_EnvironmentMap, m_CubemapSampler },  // Environment cubemap
+            { BINDING(m_Config.graphicsAPI, SkyboxBindings::PUSH_CONSTANTS), DescriptorType::UniformBuffer, ShaderStage::Fragment, m_SkyboxPushConstantBuffer, nullptr, nullptr }  // Push constants (WebGPU needs this as UBO)
+        };
 
-    rhi::DescriptorSetDesc skyboxDescriptorSetDesc;
-    skyboxDescriptorSetDesc.bindings = skyboxBindings;
-    skyboxDescriptorSetDesc.debugName = "SkyboxDescriptorSet";
-    m_SkyboxDescriptorSet = m_Device->CreateDescriptorSet(skyboxDescriptorSetDesc);
+        rhi::DescriptorSetDesc skyboxDescriptorSetDesc;
+        skyboxDescriptorSetDesc.bindings = skyboxBindings;
+        skyboxDescriptorSetDesc.debugName = "SkyboxDescriptorSet";
+        m_SkyboxDescriptorSet[frameIndex] = m_Device->CreateDescriptorSet(skyboxDescriptorSetDesc);
+    }
 
-    // Set descriptor set layout on device before creating pipeline
-    m_Device->SetActiveDescriptorSetLayout(m_DescriptorSet);
+    // Set descriptor set layout on device before creating pipeline (use frame 0)
+    m_Device->SetActiveDescriptorSetLayout(m_DescriptorSet[0]);
 
     // Create triangle resources
     CreateTriangle();
@@ -385,16 +470,16 @@ void Application::Init() {
     // Create model pipeline
     CreateModelPipeline();
 
-    // Create skybox pipeline with skybox descriptor set layout
-    m_Device->SetActiveDescriptorSetLayout(m_SkyboxDescriptorSet);
+    // Create skybox pipeline with skybox descriptor set layout (use frame 0)
+    m_Device->SetActiveDescriptorSetLayout(m_SkyboxDescriptorSet[0]);
     CreateSkyboxPipeline();
 
     // Create shadow pipeline with shadow descriptor set layout
     m_Device->SetActiveDescriptorSetLayout(m_ShadowDescriptorSet);
     CreateShadowPipeline();
 
-    // Restore main descriptor set layout
-    m_Device->SetActiveDescriptorSetLayout(m_DescriptorSet);
+    // Restore main descriptor set layout (use frame 0)
+    m_Device->SetActiveDescriptorSetLayout(m_DescriptorSet[0]);
 
     // Create skybox cube geometry
     CreateSkyboxCube();
@@ -465,6 +550,67 @@ void Application::LoadModel(const std::string& path) {
                  << m_Camera->GetPosition().x << ", "
                  << m_Camera->GetPosition().y << ", "
                  << m_Camera->GetPosition().z << ")";
+
+    // For Vulkan/Metal: update descriptor set textures once after model load.
+    // WebGPU bind groups are rebuilt per-frame during rendering.
+    if (m_Config.graphicsAPI != rhi::GraphicsAPI::WebGPU && m_DescriptorSet[0]) {
+        // CRITICAL: Wait for all GPU work to complete before updating descriptor sets.
+        // If we update descriptor sets while they're in use by in-flight command buffers,
+        // we get undefined behavior (race condition causing flickering/corruption).
+        m_Device->WaitIdle();
+
+        const auto& meshes = m_Model->GetMeshes();
+        if (!meshes.empty() && meshes[0] && meshes[0]->GetMaterial()) {
+            UpdateModelDescriptorTextures(meshes[0]->GetMaterial());
+        }
+    }
+}
+
+void Application::UpdateModelDescriptorTextures(Material* material) {
+    if (!material) return;
+
+    auto api = m_Config.graphicsAPI;
+
+    // Get all texture references
+    Ref<rhi::Texture> albedoMap = material->GetAlbedoMap();
+    Ref<rhi::Texture> normalMap = material->GetNormalMap();
+    Ref<rhi::Texture> metallicRoughnessMap = material->GetMetallicRoughnessMap();
+    Ref<rhi::Texture> metallicMap = material->GetMetallicMap();
+    Ref<rhi::Texture> roughnessMap = material->GetRoughnessMap();
+    Ref<rhi::Texture> aoMap = material->GetAOMap();
+    Ref<rhi::Texture> emissiveMap = material->GetEmissiveMap();
+
+    // Update BOTH descriptor sets (for Vulkan double buffering)
+    // WebGPU updates per-frame during rendering, so this only affects Vulkan/Metal
+    for (uint32 frameIndex = 0; frameIndex < 2; frameIndex++) {
+        if (!m_DescriptorSet[frameIndex]) continue;
+
+        auto& descriptorSet = m_DescriptorSet[frameIndex];
+
+        descriptorSet->UpdateTexture(BINDING(api, ModelBindings::ALBEDO),
+            albedoMap ? albedoMap : m_DefaultTexture, m_LinearRepeatSampler);
+
+        descriptorSet->UpdateTexture(BINDING(api, ModelBindings::NORMAL),
+            normalMap ? normalMap : m_DefaultNormalMap, m_LinearRepeatSampler);
+
+        if (metallicRoughnessMap) {
+            descriptorSet->UpdateTexture(BINDING(api, ModelBindings::METALLIC), metallicRoughnessMap, m_LinearRepeatSampler);
+            descriptorSet->UpdateTexture(BINDING(api, ModelBindings::ROUGHNESS), metallicRoughnessMap, m_LinearRepeatSampler);
+        } else {
+            descriptorSet->UpdateTexture(BINDING(api, ModelBindings::METALLIC),
+                metallicMap ? metallicMap : m_DefaultWhiteTexture, m_LinearRepeatSampler);
+            descriptorSet->UpdateTexture(BINDING(api, ModelBindings::ROUGHNESS),
+                roughnessMap ? roughnessMap : m_DefaultWhiteTexture, m_LinearRepeatSampler);
+        }
+
+        descriptorSet->UpdateTexture(BINDING(api, ModelBindings::AO),
+            aoMap ? aoMap : m_DefaultWhiteTexture, m_LinearRepeatSampler);
+
+        descriptorSet->UpdateTexture(BINDING(api, ModelBindings::EMISSIVE),
+            emissiveMap ? emissiveMap : m_DefaultBlackTexture, m_LinearRepeatSampler);
+
+        descriptorSet->Update();
+    }
 }
 
 void Application::LoadNextModel() {
@@ -644,7 +790,8 @@ void Application::CreateTriangle() {
 
     pipelineDesc.topology = rhi::PrimitiveTopology::TriangleList;
     pipelineDesc.rasterization.cullMode = rhi::CullMode::None;
-    
+    pipelineDesc.descriptorSetLayout = m_DescriptorSet[0];  // WebGPU requires explicit pipeline layout
+
     m_Pipeline = m_Device->CreateGraphicsPipeline(pipelineDesc);
     
     METAGFX_INFO << "Triangle resources created";
@@ -696,6 +843,19 @@ void Application::CreateModelPipeline() {
     // Enable depth testing for proper 3D rendering
     pipelineDesc.depthStencil.depthTestEnable = true;
     pipelineDesc.depthStencil.depthWriteEnable = true;
+    pipelineDesc.depthStencil.depthCompareOp = CompareOp::Less;  // Standard depth test
+    pipelineDesc.descriptorSetLayout = m_DescriptorSet[0];  // WebGPU requires explicit pipeline layout
+
+    // WebGPU requires explicit color attachment (even if using default format)
+    // Vulkan and Metal do NOT use this field - it causes pipeline creation to fail
+    METAGFX_INFO << "Graphics API for model pipeline: " << static_cast<int>(m_Config.graphicsAPI)
+                 << " (Vulkan=0, Metal=2, WebGPU=3)";
+    if (m_Config.graphicsAPI == rhi::GraphicsAPI::WebGPU) {
+        METAGFX_INFO << "Setting colorAttachments for WebGPU";
+        pipelineDesc.colorAttachments = { rhi::ColorAttachmentState{} };  // One color attachment, no blending
+    } else {
+        METAGFX_INFO << "Skipping colorAttachments for Vulkan/Metal";
+    }
 
     m_ModelPipeline = m_Device->CreateGraphicsPipeline(pipelineDesc);
 
@@ -747,6 +907,13 @@ void Application::CreateSkyboxPipeline() {
     pipelineDesc.depthStencil.depthTestEnable = true;
     pipelineDesc.depthStencil.depthWriteEnable = false;  // Don't write depth
     pipelineDesc.depthStencil.depthCompareOp = CompareOp::LessOrEqual;
+    pipelineDesc.descriptorSetLayout = m_SkyboxDescriptorSet[0];  // WebGPU requires explicit pipeline layout
+
+    // WebGPU requires explicit color attachment (even if using default format)
+    // Vulkan and Metal do NOT use this field - it causes pipeline creation to fail
+    if (m_Config.graphicsAPI == rhi::GraphicsAPI::WebGPU) {
+        pipelineDesc.colorAttachments = { rhi::ColorAttachmentState{} };  // One color attachment, no blending
+    }
 
     m_SkyboxPipeline = m_Device->CreateGraphicsPipeline(pipelineDesc);
 
@@ -801,6 +968,7 @@ void Application::CreateShadowPipeline() {
     pipelineDesc.depthStencil.depthTestEnable = true;
     pipelineDesc.depthStencil.depthWriteEnable = true;
     pipelineDesc.depthStencil.depthCompareOp = CompareOp::Less;  // Standard: closer fragments win
+    pipelineDesc.descriptorSetLayout = m_ShadowDescriptorSet;  // WebGPU requires explicit pipeline layout
 
     m_ShadowPipeline = m_Device->CreateGraphicsPipeline(pipelineDesc);
 
@@ -1063,9 +1231,8 @@ void Application::Render() {
         ubo.projection[1][1] *= -1.0f;
     }
 
-    // FIXME: Descriptor sets all point to buffer[0], so always update buffer[0]
-    // TODO: Properly configure double buffering in descriptor sets
-    m_UniformBuffers[0]->CopyData(&ubo, sizeof(ubo));
+    // Use per-frame uniform buffer for proper double buffering
+    m_UniformBuffers[m_CurrentFrame]->CopyData(&ubo, sizeof(ubo));
 
     // Update light buffer before rendering
     m_Scene->UpdateLightBuffer();
@@ -1073,10 +1240,45 @@ void Application::Render() {
     // Create command buffer
     auto cmd = m_Device->CreateCommandBuffer();
 
+    // Update push constant buffers BEFORE beginning command encoding
+    // (WebGPU queue.WriteBuffer must complete before commands execute)
+    #ifdef METAGFX_USE_WEBGPU
+    {
+        struct ModelPushConstants {
+            glm::vec4 cameraPosition;
+            uint32_t materialFlags;
+            float exposure;
+            uint32_t enableIBL;
+            float iblIntensity;
+            uint32_t shadowDebugMode;
+            uint32_t enableShadows;
+        };
+
+        ModelPushConstants modelPushConst{};
+        modelPushConst.cameraPosition = glm::vec4(m_Camera->GetPosition(), 1.0f);
+        modelPushConst.materialFlags = 0;
+        modelPushConst.exposure = m_Exposure;
+        modelPushConst.enableIBL = m_EnableIBL ? 1u : 0u;
+        modelPushConst.iblIntensity = m_IBLIntensity;
+        modelPushConst.shadowDebugMode = m_ShadowDebugMode;
+        modelPushConst.enableShadows = m_EnableShadows ? 1u : 0u;
+
+        // Write the actual data (40 bytes) to the current frame's buffer
+        m_ModelPushConstantBuffer[m_CurrentFrame]->CopyData(&modelPushConst, sizeof(ModelPushConstants));
+    }
+    #endif
+
     cmd->Begin();
 
     // Advanced features now working on Metal - all features enabled
     bool debugDisableAdvancedFeatures = false;  // All features enabled: shadows, ground plane, skybox
+
+    // DEBUG: For WebGPU, gradually enable features
+    #ifdef METAGFX_USE_WEBGPU
+    bool enableWebGPUDrawing = true;  // Clear color works! Now test rendering
+    #else
+    bool enableWebGPUDrawing = true;
+    #endif
 
     // Add buffer memory barrier to ensure light buffer writes are visible to GPU
     auto lightBuffer = m_Scene->GetLightBuffer();
@@ -1101,7 +1303,7 @@ void Application::Render() {
         loggedConditions = true;
     }
 
-    if (!debugDisableAdvancedFeatures && m_EnableShadows && m_ShadowMap && m_Model && m_Model->IsValid()) {
+    if (enableWebGPUDrawing && !debugDisableAdvancedFeatures && m_EnableShadows && m_ShadowMap && m_Model && m_Model->IsValid()) {
         // Debug: Log shadow pass execution
         static bool loggedShadowPass = false;
         if (!loggedShadowPass) {
@@ -1172,6 +1374,7 @@ void Application::Render() {
             cmd->SetScissor(shadowScissor);
 
             // Bind shadow pipeline
+            // METAGFX_INFO << "Binding SHADOW pipeline (ptr=" << m_ShadowPipeline.get() << ")";
             cmd->BindPipeline(m_ShadowPipeline);
 
             // Bind shadow descriptor set
@@ -1266,9 +1469,10 @@ void Application::Render() {
 
     // Begin rendering
     ClearValue colorClear{};
-    colorClear.color[0] = 0.1f;
-    colorClear.color[1] = 0.1f;
-    colorClear.color[2] = 0.15f;
+    // DEBUG: Use bright green to identify clear color
+    colorClear.color[0] = 0.0f;  // Green
+    colorClear.color[1] = 1.0f;
+    colorClear.color[2] = 0.0f;
     colorClear.color[3] = 1.0f;
 
     ClearValue depthClear{};
@@ -1299,12 +1503,31 @@ void Application::Render() {
     }
 
     // Draw the model FIRST - now enabled for Metal testing
-    if (m_Model && m_Model->IsValid()) {
+    if (enableWebGPUDrawing && m_Model && m_Model->IsValid()) {
         // Bind model pipeline
+        // METAGFX_INFO << "Binding MODEL pipeline (ptr=" << m_ModelPipeline.get() << ")";
         cmd->BindPipeline(m_ModelPipeline);
+        // METAGFX_INFO << "Pipeline bound, now binding descriptor set with frameIndex=" << m_CurrentFrame;
 
         // Bind descriptor set (use current frame index for double buffering)
-        cmd->BindDescriptorSet(m_ModelPipeline, m_DescriptorSet, m_CurrentFrame);
+        cmd->BindDescriptorSet(m_ModelPipeline, m_DescriptorSet[m_CurrentFrame], 0);
+        // METAGFX_INFO << "Descriptor set bound successfully";
+
+        // Prepare push constant data structure for all backends
+        // The shader uses layout(binding = 14) uniform, so we need this uniform buffer
+        // NOTE: Must match shader layout exactly (40 bytes, no padding)
+        struct ModelPushConstants {
+            glm::vec4 cameraPosition;    // 16 bytes
+            uint32_t materialFlags;      // 4 bytes
+            float exposure;              // 4 bytes
+            uint32_t enableIBL;          // 4 bytes
+            float iblIntensity;          // 4 bytes
+            uint32_t shadowDebugMode;    // 4 bytes
+            uint32_t enableShadows;      // 4 bytes
+        };  // Total: 40 bytes
+        ModelPushConstants modelPushConst{};
+        modelPushConst.cameraPosition = glm::vec4(m_Camera->GetPosition(), 1.0f);
+        // Material-specific fields will be updated per-mesh below
 
         // Push camera position for specular lighting
         glm::vec4 cameraPos(m_Camera->GetPosition(), 1.0f);
@@ -1316,69 +1539,16 @@ void Application::Render() {
             if (mesh && mesh->IsValid() && mesh->GetMaterial()) {
                 Material* material = mesh->GetMaterial();
 
-                // Update material buffer for this mesh
+                // Update material buffer for this mesh (use per-frame buffer)
                 MaterialProperties matProps = material->GetProperties();
-                m_MaterialBuffers[0]->CopyData(&matProps, sizeof(matProps));
+                m_MaterialBuffers[m_CurrentFrame]->CopyData(&matProps, sizeof(matProps));
 
-                // Bind all PBR textures (or defaults)
-
-                // Binding 2: Albedo map
-                Ref<rhi::Texture> albedoMap = material->GetAlbedoMap();
-                if (albedoMap) {
-                    m_DescriptorSet->UpdateTexture(2, albedoMap, m_LinearRepeatSampler);
-                } else {
-                    m_DescriptorSet->UpdateTexture(2, m_DefaultTexture, m_LinearRepeatSampler);
+                // WebGPU: rebuild bind group every frame since textures may differ per mesh.
+                // Vulkan/Metal: textures are set once after model load (no per-frame mutation).
+                if (m_Config.graphicsAPI == rhi::GraphicsAPI::WebGPU) {
+                    UpdateModelDescriptorTextures(material);
+                    cmd->BindDescriptorSet(m_ModelPipeline, m_DescriptorSet[m_CurrentFrame], 0);
                 }
-
-                // Binding 4: Normal map
-                Ref<rhi::Texture> normalMap = material->GetNormalMap();
-                if (normalMap) {
-                    m_DescriptorSet->UpdateTexture(4, normalMap, m_LinearRepeatSampler);
-                } else {
-                    m_DescriptorSet->UpdateTexture(4, m_DefaultNormalMap, m_LinearRepeatSampler);
-                }
-
-                // Binding 5: Metallic map
-                Ref<rhi::Texture> metallicMap = material->GetMetallicMap();
-                Ref<rhi::Texture> metallicRoughnessMap = material->GetMetallicRoughnessMap();
-                if (metallicRoughnessMap) {
-                    // Use combined texture for both metallic (binding 5) and roughness (binding 6)
-                    m_DescriptorSet->UpdateTexture(5, metallicRoughnessMap, m_LinearRepeatSampler);
-                    m_DescriptorSet->UpdateTexture(6, metallicRoughnessMap, m_LinearRepeatSampler);
-                } else {
-                    if (metallicMap) {
-                        m_DescriptorSet->UpdateTexture(5, metallicMap, m_LinearRepeatSampler);
-                    } else {
-                        m_DescriptorSet->UpdateTexture(5, m_DefaultWhiteTexture, m_LinearRepeatSampler);
-                    }
-
-                    // Binding 6: Roughness map
-                    Ref<rhi::Texture> roughnessMap = material->GetRoughnessMap();
-                    if (roughnessMap) {
-                        m_DescriptorSet->UpdateTexture(6, roughnessMap, m_LinearRepeatSampler);
-                    } else {
-                        m_DescriptorSet->UpdateTexture(6, m_DefaultWhiteTexture, m_LinearRepeatSampler);
-                    }
-                }
-
-                // Binding 7: AO map
-                Ref<rhi::Texture> aoMap = material->GetAOMap();
-                if (aoMap) {
-                    m_DescriptorSet->UpdateTexture(7, aoMap, m_LinearRepeatSampler);
-                } else {
-                    m_DescriptorSet->UpdateTexture(7, m_DefaultWhiteTexture, m_LinearRepeatSampler);
-                }
-
-                // Binding 11: Emissive map
-                Ref<rhi::Texture> emissiveMap = material->GetEmissiveMap();
-                if (emissiveMap) {
-                    m_DescriptorSet->UpdateTexture(11, emissiveMap, m_LinearRepeatSampler);
-                } else {
-                    m_DescriptorSet->UpdateTexture(11, m_DefaultBlackTexture, m_LinearRepeatSampler);
-                }
-
-                // Re-bind descriptor set after texture updates
-                cmd->BindDescriptorSet(m_ModelPipeline, m_DescriptorSet, m_CurrentFrame);
 
                 // Push material flags and exposure (offset 16 bytes after cameraPosition vec4)
                 uint32_t flags = material->GetTextureFlags();
@@ -1440,6 +1610,23 @@ void Application::Render() {
                 cmd->PushConstants(m_ModelPipeline, ShaderStage::Fragment,
                                    36, sizeof(uint32_t), &enableShadows);
 
+                // Update push constant uniform buffer for all backends
+                // The shader now uses layout(binding = 14) uniform instead of layout(push_constant)
+                // so we need to update the uniform buffer, not just call PushConstants()
+                modelPushConst.materialFlags = flags;
+                modelPushConst.exposure = m_Exposure;
+                modelPushConst.enableIBL = enableIBL;
+                modelPushConst.iblIntensity = m_IBLIntensity;
+                modelPushConst.shadowDebugMode = shadowDebugMode;
+                modelPushConst.enableShadows = enableShadows;
+
+                m_ModelPushConstantBuffer[m_CurrentFrame]->CopyData(&modelPushConst, sizeof(ModelPushConstants));
+
+                #ifdef METAGFX_USE_WEBGPU
+                // Re-bind descriptor set to ensure push constant buffer is bound (WebGPU only)
+                cmd->BindDescriptorSet(m_ModelPipeline, m_DescriptorSet[m_CurrentFrame], 0);
+                #endif
+
                 // Bind and draw
                 cmd->BindVertexBuffer(mesh->GetVertexBuffer());
                 cmd->BindIndexBuffer(mesh->GetIndexBuffer());
@@ -1464,32 +1651,31 @@ void Application::Render() {
         // causes issues. Just bind the pre-configured descriptor set.
 
         // Bind ground plane's dedicated descriptor set (use current frame for double buffering)
-        cmd->BindDescriptorSet(m_ModelPipeline, m_GroundPlaneDescriptorSet, m_CurrentFrame);
+        cmd->BindDescriptorSet(m_ModelPipeline, m_GroundPlaneDescriptorSet[m_CurrentFrame], 0);
 
         // Push material flags (no textures)
         uint32_t flags = 0;
         cmd->PushConstants(m_ModelPipeline, ShaderStage::Fragment, 16, sizeof(uint32_t), &flags);
 
         // Draw ground plane
-        for (const auto& mesh : m_GroundPlane->GetMeshes()) {
-            if (mesh && mesh->IsValid()) {
-                cmd->BindVertexBuffer(mesh->GetVertexBuffer());
-                cmd->BindIndexBuffer(mesh->GetIndexBuffer());
-                cmd->DrawIndexed(mesh->GetIndexCount());
+        if (enableWebGPUDrawing) {
+            for (const auto& mesh : m_GroundPlane->GetMeshes()) {
+                if (mesh && mesh->IsValid()) {
+                    cmd->BindVertexBuffer(mesh->GetVertexBuffer());
+                    cmd->BindIndexBuffer(mesh->GetIndexBuffer());
+                    cmd->DrawIndexed(mesh->GetIndexCount());
+                }
             }
         }
     }
 
     // Render skybox LAST (only where depth >= model depth)
-    if (!debugDisableAdvancedFeatures && m_ShowSkybox && m_EnvironmentMap && m_SkyboxPipeline && m_SkyboxVertexBuffer && m_SkyboxIndexBuffer && m_SkyboxDescriptorSet) {
+    if (enableWebGPUDrawing && !debugDisableAdvancedFeatures && m_ShowSkybox && m_EnvironmentMap && m_SkyboxPipeline && m_SkyboxVertexBuffer && m_SkyboxIndexBuffer && m_SkyboxDescriptorSet[m_CurrentFrame]) {
         cmd->BindPipeline(m_SkyboxPipeline);
 
-        // Update skybox descriptor set with uniform buffer (always use buffer[0])
-        // FIXME: Matches main renderer which always updates buffer[0]
-        m_SkyboxDescriptorSet->UpdateBuffer(0, m_UniformBuffers[0]);
-
         // Bind skybox descriptor set (binding 0: MVP, binding 1: environment cubemap)
-        cmd->BindDescriptorSet(m_SkyboxPipeline, m_SkyboxDescriptorSet, m_CurrentFrame);
+        // Each frame's descriptor set already points to the correct per-frame uniform buffer
+        cmd->BindDescriptorSet(m_SkyboxPipeline, m_SkyboxDescriptorSet[m_CurrentFrame], 0);
 
         // Push constants: exposure and LOD
         struct SkyboxPushConstants {
@@ -1503,27 +1689,51 @@ void Application::Render() {
         cmd->PushConstants(m_SkyboxPipeline, ShaderStage::Fragment,
                            0, sizeof(SkyboxPushConstants), &skyboxPushConstants);
 
+        // For WebGPU, update the push constant buffer (binding 3)
+        #ifdef METAGFX_USE_WEBGPU
+        m_SkyboxPushConstantBuffer->CopyData(&skyboxPushConstants, sizeof(SkyboxPushConstants));
+        // Re-bind descriptor set to ensure push constant buffer is bound
+        cmd->BindDescriptorSet(m_SkyboxPipeline, m_SkyboxDescriptorSet[m_CurrentFrame], 0);
+        #endif
+
         // Draw the skybox cube
         cmd->BindVertexBuffer(m_SkyboxVertexBuffer);
         cmd->BindIndexBuffer(m_SkyboxIndexBuffer);
         cmd->DrawIndexed(36);  // 36 indices for the cube
     }
 
-    // Render ImGui overlay BEFORE EndRendering (Metal needs active encoder)
-    RenderImGui(cmd, backBuffer);
+    // ImGui rendering order depends on backend:
+    // - Metal/WebGPU: ImGui must be rendered within the main render pass (BEFORE EndRendering)
+    // - Vulkan: ImGui uses its own separate render pass (AFTER EndRendering)
+    auto api = m_Device->GetDeviceInfo().api;
 
-    cmd->EndRendering();
+    if (api == GraphicsAPI::Metal || api == GraphicsAPI::WebGPU) {
+        // Render ImGui within the active render pass for Metal/WebGPU
+        RenderImGui(cmd, backBuffer);
+        cmd->EndRendering();
+    } else {
+        // For Vulkan: end main render pass first, then render ImGui in separate pass
+        cmd->EndRendering();
+        RenderImGui(cmd, backBuffer);
+    }
 
     cmd->End();
 
     // Submit command buffer (contains both main rendering and ImGui)
     m_Device->SubmitCommandBuffer(cmd);
 
-    // Present
+    // Present (advances VulkanSwapChain's internal frame counter)
     swapChain->Present();
-    
-    // Advance frame
-    m_CurrentFrame = (m_CurrentFrame + 1) % 2;
+
+    // Synchronize Application's frame counter with swap chain's frame counter
+    // This ensures buffer/descriptor set selection matches the sync objects
+    if (api == GraphicsAPI::Vulkan) {
+        auto vkSwapChain = std::static_pointer_cast<rhi::VulkanSwapChain>(swapChain);
+        m_CurrentFrame = vkSwapChain->GetCurrentFrame();
+    } else {
+        // For Metal and WebGPU, advance normally
+        m_CurrentFrame = (m_CurrentFrame + 1) % 2;
+    }
 }
 
 void Application::Shutdown() {
@@ -1561,12 +1771,18 @@ void Application::Shutdown() {
     m_MaterialBuffers[1].reset();
     m_GroundPlaneMaterialBuffer.reset();
     m_ShadowUniformBuffer.reset();
+    m_ModelPushConstantBuffer[0].reset();
+    m_ModelPushConstantBuffer[1].reset();
+    m_SkyboxPushConstantBuffer.reset();
 
     // Clean up descriptor sets
-    m_DescriptorSet.reset();
-    m_SkyboxDescriptorSet.reset();
+    m_DescriptorSet[0].reset();
+    m_DescriptorSet[1].reset();
+    m_SkyboxDescriptorSet[0].reset();
+    m_SkyboxDescriptorSet[1].reset();
     m_ShadowDescriptorSet.reset();
-    m_GroundPlaneDescriptorSet.reset();
+    m_GroundPlaneDescriptorSet[0].reset();
+    m_GroundPlaneDescriptorSet[1].reset();
 
     // Clean up textures (must be before device destruction)
     m_DefaultTexture.reset();
@@ -1611,6 +1827,7 @@ void Application::InitImGui() {
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
     ImGui::StyleColorsDark();
 
+#ifdef METAGFX_USE_METAL
     if (api == rhi::GraphicsAPI::Metal) {
         // Initialize ImGui for Metal backend
         auto metalDevice = std::static_pointer_cast<rhi::MetalDevice>(m_Device);
@@ -1619,12 +1836,31 @@ void Application::InitImGui() {
         ImGui_ImplSDL3_InitForMetal(m_Window);
         ImGui_ImplMetal_Init(context.device);
 
-        // Create fonts texture for Metal
-        ImGui_ImplMetal_CreateFontsTexture(context.device);
-
         METAGFX_INFO << "ImGui initialized for Metal backend";
         return;
     }
+#endif
+
+#ifdef METAGFX_USE_WEBGPU
+    if (api == rhi::GraphicsAPI::WebGPU) {
+        // Initialize ImGui for WebGPU backend
+        auto webgpuDevice = std::static_pointer_cast<rhi::WebGPUDevice>(m_Device);
+        auto& context = webgpuDevice->GetContext();
+
+        ImGui_ImplSDL3_InitForOther(m_Window);
+
+        ImGui_ImplWGPU_InitInfo initInfo{};
+        initInfo.Device = context.device.Get();
+        initInfo.NumFramesInFlight = 2;
+        initInfo.RenderTargetFormat = WGPUTextureFormat_BGRA8Unorm;
+        initInfo.DepthStencilFormat = WGPUTextureFormat_Depth32Float;
+
+        ImGui_ImplWGPU_Init(&initInfo);
+
+        METAGFX_INFO << "ImGui initialized for WebGPU backend";
+        return;
+    }
+#endif
 
     if (api != rhi::GraphicsAPI::Vulkan) {
         METAGFX_INFO << "ImGui not supported for this backend yet";
@@ -1685,8 +1921,9 @@ void Application::InitImGui() {
     dependency.dstSubpass = 0;
     dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
     dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-    dependency.srcAccessMask = 0;
-    dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    // Wait for previous render pass color writes to complete before ImGui's load (read) and writes
+    dependency.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
 
     VkRenderPassCreateInfo renderPassInfo{};
     renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
@@ -1709,21 +1946,25 @@ void Application::InitImGui() {
     METAGFX_INFO << "InitImGui: Swap chain has " << imageCount << " images";
 
     ImGui_ImplVulkan_InitInfo initInfo{};
+    initInfo.ApiVersion = VK_API_VERSION_1_3;
     initInfo.Instance = context.instance;
     initInfo.PhysicalDevice = context.physicalDevice;
     initInfo.Device = context.device;
     initInfo.QueueFamily = context.graphicsQueueFamily;
     initInfo.Queue = context.graphicsQueue;
     initInfo.DescriptorPool = m_ImGuiDescriptorPool;
-    initInfo.RenderPass = m_ImGuiRenderPass;
     initInfo.MinImageCount = imageCount;
     initInfo.ImageCount = imageCount;
-    initInfo.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
+    initInfo.PipelineCache = VK_NULL_HANDLE;
+
+    // New in ImGui v1.92.x: Pipeline info moved to separate structure
+    initInfo.PipelineInfoMain.RenderPass = m_ImGuiRenderPass;
+    initInfo.PipelineInfoMain.Subpass = 0;
+    initInfo.PipelineInfoMain.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
+
+    initInfo.UseDynamicRendering = false;  // We're using render pass, not dynamic rendering
 
     ImGui_ImplVulkan_Init(&initInfo);
-
-    // Upload fonts
-    ImGui_ImplVulkan_CreateFontsTexture();
 
     // Wait for font upload to complete
     vkDeviceWaitIdle(context.device);
@@ -1738,12 +1979,23 @@ void Application::ShutdownImGui() {
 
     auto api = m_Device->GetDeviceInfo().api;
 
+#ifdef METAGFX_USE_METAL
     if (api == rhi::GraphicsAPI::Metal) {
         ImGui_ImplMetal_Shutdown();
         ImGui_ImplSDL3_Shutdown();
         ImGui::DestroyContext();
         return;
     }
+#endif
+
+#ifdef METAGFX_USE_WEBGPU
+    if (api == rhi::GraphicsAPI::WebGPU) {
+        ImGui_ImplWGPU_Shutdown();
+        ImGui_ImplSDL3_Shutdown();
+        ImGui::DestroyContext();
+        return;
+    }
+#endif
 
     if (api != rhi::GraphicsAPI::Vulkan) {
         return;
@@ -1787,6 +2039,7 @@ void Application::RenderImGui(Ref<rhi::CommandBuffer> cmd, Ref<rhi::Texture> bac
     // Start ImGui frame
     ImGui_ImplSDL3_NewFrame();
 
+#ifdef METAGFX_USE_METAL
     if (api == rhi::GraphicsAPI::Metal) {
         // Metal backend needs NewFrame with render pass descriptor
         auto metalCmd = std::static_pointer_cast<rhi::MetalCommandBuffer>(cmd);
@@ -1814,6 +2067,13 @@ void Application::RenderImGui(Ref<rhi::CommandBuffer> cmd, Ref<rhi::Texture> bac
             logged = true;
         }
     }
+#endif
+
+#ifdef METAGFX_USE_WEBGPU
+    if (api == rhi::GraphicsAPI::WebGPU) {
+        ImGui_ImplWGPU_NewFrame();
+    }
+#endif
 
     ImGui::NewFrame();
 
@@ -1845,11 +2105,15 @@ void Application::RenderImGui(Ref<rhi::CommandBuffer> cmd, Ref<rhi::Texture> bac
     // Determine which backends are available
     bool vulkanAvailable = false;
     bool metalAvailable = false;
+    bool webgpuAvailable = false;
 #ifdef METAGFX_USE_VULKAN
     vulkanAvailable = true;
 #endif
 #ifdef METAGFX_USE_METAL
     metalAvailable = true;
+#endif
+#ifdef METAGFX_USE_WEBGPU
+    webgpuAvailable = true;
 #endif
 
     ImGui::Spacing();
@@ -1870,6 +2134,13 @@ void Application::RenderImGui(Ref<rhi::CommandBuffer> cmd, Ref<rhi::Texture> bac
             bool isSelected = (selectedBackend == 2);
             if (ImGui::Selectable("Metal", isSelected)) {
                 selectedBackend = 2;
+            }
+            if (isSelected) ImGui::SetItemDefaultFocus();
+        }
+        if (webgpuAvailable) {
+            bool isSelected = (selectedBackend == 3);
+            if (ImGui::Selectable("WebGPU", isSelected)) {
+                selectedBackend = 3;
             }
             if (isSelected) ImGui::SetItemDefaultFocus();
         }
@@ -2055,6 +2326,7 @@ void Application::RenderImGui(Ref<rhi::CommandBuffer> cmd, Ref<rhi::Texture> bac
     }
 
     // Backend-specific rendering
+#ifdef METAGFX_USE_METAL
     if (api == rhi::GraphicsAPI::Metal) {
         // Metal: Render directly to the current render encoder
         auto metalCmd = std::static_pointer_cast<rhi::MetalCommandBuffer>(cmd);
@@ -2070,6 +2342,24 @@ void Application::RenderImGui(Ref<rhi::CommandBuffer> cmd, Ref<rhi::Texture> bac
                                        metalCmd->GetRenderEncoder());
         return;
     }
+#endif
+
+#ifdef METAGFX_USE_WEBGPU
+    if (api == rhi::GraphicsAPI::WebGPU) {
+        // WebGPU: Render to the active render pass encoder
+        // ImGui must render within the existing render pass (WebGPU doesn't support nested passes)
+        auto webgpuCmd = std::static_pointer_cast<rhi::WebGPUCommandBuffer>(cmd);
+        WGPURenderPassEncoder passEncoder = webgpuCmd->GetRenderPassEncoder().Get();
+
+        if (!passEncoder) {
+            METAGFX_ERROR << "RenderImGui: No active render pass encoder";
+            return;
+        }
+
+        ImGui_ImplWGPU_RenderDrawData(drawData, passEncoder);
+        return;
+    }
+#endif
 
     if (api != rhi::GraphicsAPI::Vulkan) {
         return;
@@ -2115,28 +2405,9 @@ void Application::RenderImGui(Ref<rhi::CommandBuffer> cmd, Ref<rhi::Texture> bac
     auto vkCmd = std::static_pointer_cast<rhi::VulkanCommandBuffer>(cmd);
     VkCommandBuffer commandBuffer = vkCmd->GetHandle();
 
-    // Transition image from PRESENT_SRC_KHR to COLOR_ATTACHMENT_OPTIMAL for ImGui render pass
-    // METAGFX_INFO << "RenderImGui: Setting up image barrier";
-    VkImageMemoryBarrier barrier{};
-    barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-    barrier.oldLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-    barrier.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier.image = vkTexture->GetImage();
-    barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    barrier.subresourceRange.baseMipLevel = 0;
-    barrier.subresourceRange.levelCount = 1;
-    barrier.subresourceRange.baseArrayLayer = 0;
-    barrier.subresourceRange.layerCount = 1;
-    barrier.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-    barrier.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-
-    // METAGFX_INFO << "RenderImGui: Recording pipeline barrier";
-    vkCmdPipelineBarrier(commandBuffer,
-                         VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-                         VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-                         0, 0, nullptr, 0, nullptr, 1, &barrier);
+    // The main render pass finalLayout = PRESENT_SRC_KHR, so the image is in that
+    // layout when we reach here. The ImGui render pass has initialLayout = PRESENT_SRC_KHR,
+    // so it handles the transition to COLOR_ATTACHMENT_OPTIMAL internally. No manual barrier needed.
 
     // METAGFX_INFO << "RenderImGui: Setting up render pass";
     VkRenderPassBeginInfo renderPassInfo{};

@@ -77,7 +77,7 @@ wgpu::TextureFormat ToWebGPUTextureFormat(Format format) {
         case Format::R32G32B32_UINT:
         case Format::R32G32B32_SINT:
         case Format::R32G32B32_SFLOAT:
-            WEBGPU_LOG_ERROR("Unsupported format: " << static_cast<int>(format));
+            METAGFX_ERROR << "Unsupported format: " << static_cast<int>(format);
             return wgpu::TextureFormat::Undefined;
 
         case Format::Undefined:
@@ -93,7 +93,7 @@ wgpu::IndexFormat ToWebGPUIndexFormat(Format format) {
         case Format::R32_UINT:
             return wgpu::IndexFormat::Uint32;
         default:
-            WEBGPU_LOG_ERROR("Invalid index format: " << static_cast<int>(format));
+            METAGFX_ERROR << "Invalid index format: " << static_cast<int>(format);
             return wgpu::IndexFormat::Uint32;
     }
 }
@@ -123,7 +123,7 @@ wgpu::AddressMode ToWebGPUAddressMode(SamplerAddressMode mode) {
         case SamplerAddressMode::MirroredRepeat: return wgpu::AddressMode::MirrorRepeat;
         case SamplerAddressMode::ClampToEdge:    return wgpu::AddressMode::ClampToEdge;
         default:
-            WEBGPU_LOG_ERROR("Unsupported address mode: " << static_cast<int>(mode));
+            METAGFX_ERROR << "Unsupported address mode: " << static_cast<int>(mode);
             return wgpu::AddressMode::Repeat;
     }
 }
@@ -133,7 +133,7 @@ wgpu::FilterMode ToWebGPUFilterMode(Filter filter) {
         case Filter::Nearest: return wgpu::FilterMode::Nearest;
         case Filter::Linear:  return wgpu::FilterMode::Linear;
         default:
-            WEBGPU_LOG_ERROR("Unsupported filter mode: " << static_cast<int>(filter));
+            METAGFX_ERROR << "Unsupported filter mode: " << static_cast<int>(filter);
             return wgpu::FilterMode::Linear;
     }
 }
@@ -143,7 +143,7 @@ wgpu::MipmapFilterMode ToWebGPUMipMapFilterMode(Filter filter) {
         case Filter::Nearest: return wgpu::MipmapFilterMode::Nearest;
         case Filter::Linear:  return wgpu::MipmapFilterMode::Linear;
         default:
-            WEBGPU_LOG_ERROR("Unsupported mipmap filter mode: " << static_cast<int>(filter));
+            METAGFX_ERROR << "Unsupported mipmap filter mode: " << static_cast<int>(filter);
             return wgpu::MipmapFilterMode::Linear;
     }
 }
@@ -159,7 +159,7 @@ wgpu::CompareFunction ToWebGPUCompareFunction(CompareOp op) {
         case CompareOp::GreaterOrEqual: return wgpu::CompareFunction::GreaterEqual;
         case CompareOp::Always:         return wgpu::CompareFunction::Always;
         default:
-            WEBGPU_LOG_ERROR("Unsupported compare function: " << static_cast<int>(op));
+            METAGFX_ERROR << "Unsupported compare function: " << static_cast<int>(op);
             return wgpu::CompareFunction::Always;
     }
 }
@@ -172,7 +172,7 @@ wgpu::PrimitiveTopology ToWebGPUPrimitiveTopology(PrimitiveTopology topology) {
         case PrimitiveTopology::LineStrip:     return wgpu::PrimitiveTopology::LineStrip;
         case PrimitiveTopology::PointList:     return wgpu::PrimitiveTopology::PointList;
         default:
-            WEBGPU_LOG_ERROR("Unsupported primitive topology: " << static_cast<int>(topology));
+            METAGFX_ERROR << "Unsupported primitive topology: " << static_cast<int>(topology);
             return wgpu::PrimitiveTopology::TriangleList;
     }
 }
@@ -184,20 +184,23 @@ wgpu::CullMode ToWebGPUCullMode(CullMode mode) {
         case CullMode::Back:  return wgpu::CullMode::Back;
         case CullMode::FrontAndBack:
             // WebGPU doesn't support culling both faces, default to back
-            WEBGPU_LOG_ERROR("WebGPU doesn't support FrontAndBack cull mode, using Back");
+            METAGFX_ERROR << "WebGPU doesn't support FrontAndBack cull mode, using Back";
             return wgpu::CullMode::Back;
         default:
-            WEBGPU_LOG_ERROR("Unsupported cull mode: " << static_cast<int>(mode));
+            METAGFX_ERROR << "Unsupported cull mode: " << static_cast<int>(mode);
             return wgpu::CullMode::None;
     }
 }
 
 wgpu::FrontFace ToWebGPUFrontFace(FrontFace face) {
+    // WebGPU uses the same winding order convention as Vulkan
+    // The NDC Y-axis difference is handled in the projection matrix (flipY parameter)
+    // NOT in the winding order
     switch (face) {
         case FrontFace::Clockwise:        return wgpu::FrontFace::CW;
         case FrontFace::CounterClockwise: return wgpu::FrontFace::CCW;
         default:
-            WEBGPU_LOG_ERROR("Unsupported front face: " << static_cast<int>(face));
+            METAGFX_ERROR << "Unsupported front face: " << static_cast<int>(face);
             return wgpu::FrontFace::CCW;
     }
 }
@@ -260,7 +263,7 @@ wgpu::VertexFormat ToWebGPUVertexFormat(Format format) {
         case Format::R32G32B32A32_SFLOAT: return wgpu::VertexFormat::Float32x4;
 
         default:
-            WEBGPU_LOG_ERROR("Unsupported vertex format: " << static_cast<int>(format));
+            METAGFX_ERROR << "Unsupported vertex format: " << static_cast<int>(format);
             return wgpu::VertexFormat::Float32x3;
     }
 }
@@ -279,7 +282,7 @@ wgpu::ShaderStage ToWebGPUShaderStage(ShaderStage stages) {
     if (static_cast<int>(stages) & (static_cast<int>(ShaderStage::Geometry) |
                                     static_cast<int>(ShaderStage::TessellationControl) |
                                     static_cast<int>(ShaderStage::TessellationEvaluation))) {
-        WEBGPU_LOG_ERROR("WebGPU doesn't support geometry or tessellation shaders");
+        METAGFX_ERROR << "WebGPU doesn't support geometry or tessellation shaders";
     }
 
     return result;

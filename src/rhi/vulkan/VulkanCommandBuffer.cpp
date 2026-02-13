@@ -223,7 +223,7 @@ void VulkanCommandBuffer::BindVertexBuffer(Ref<Buffer> buffer, uint64 offset) {
     auto vkBuffer = std::static_pointer_cast<VulkanBuffer>(buffer);
     VkBuffer buffers[] = { vkBuffer->GetHandle() };
     VkDeviceSize offsets[] = { offset };
-    
+
     vkCmdBindVertexBuffers(m_CommandBuffer, 0, 1, buffers, offsets);
 }
 

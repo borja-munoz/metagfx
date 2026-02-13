@@ -12,24 +12,24 @@ WebGPUSampler::WebGPUSampler(WebGPUContext& context, const SamplerDesc& desc)
 
     // Create sampler descriptor
     wgpu::SamplerDescriptor samplerDesc{};
-    samplerDesc.label = desc.debugName ? desc.debugName : "Sampler";
+    samplerDesc.label = "Sampler";
 
     // Address modes
     samplerDesc.addressModeU = ToWebGPUAddressMode(desc.addressModeU);
     samplerDesc.addressModeV = ToWebGPUAddressMode(desc.addressModeV);
     samplerDesc.addressModeW = ToWebGPUAddressMode(desc.addressModeW);
 
-    // Filter modes
+    // Filter modes (mipmapMode is used for mipmapFilter)
     samplerDesc.magFilter = ToWebGPUFilterMode(desc.magFilter);
     samplerDesc.minFilter = ToWebGPUFilterMode(desc.minFilter);
-    samplerDesc.mipmapFilter = ToWebGPUMipMapFilterMode(desc.mipmapFilter);
+    samplerDesc.mipmapFilter = ToWebGPUMipMapFilterMode(desc.mipmapMode);
 
     // LOD settings
     samplerDesc.lodMinClamp = desc.minLod;
     samplerDesc.lodMaxClamp = desc.maxLod;
 
     // Comparison (for shadow sampling)
-    if (desc.compareEnable) {
+    if (desc.enableCompare) {
         samplerDesc.compare = ToWebGPUCompareFunction(desc.compareOp);
     } else {
         samplerDesc.compare = wgpu::CompareFunction::Undefined;
@@ -42,7 +42,7 @@ WebGPUSampler::WebGPUSampler(WebGPUContext& context, const SamplerDesc& desc)
     m_Sampler = m_Context.device.CreateSampler(&samplerDesc);
 
     if (!m_Sampler) {
-        WEBGPU_LOG_ERROR("Failed to create sampler");
+        METAGFX_ERROR << "Failed to create sampler";
         throw std::runtime_error("Failed to create WebGPU sampler");
     }
 }

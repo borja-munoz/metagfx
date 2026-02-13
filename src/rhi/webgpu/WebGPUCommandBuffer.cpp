@@ -25,7 +25,7 @@ WebGPUCommandBuffer::WebGPUCommandBuffer(WebGPUContext& context)
 
     m_PushConstantGPUBuffer = m_Context.device.CreateBuffer(&bufferDesc);
     if (!m_PushConstantGPUBuffer) {
-        WEBGPU_LOG_ERROR("Failed to create push constant buffer");
+        METAGFX_ERROR << "Failed to create push constant buffer";
     }
 }
 
@@ -42,7 +42,7 @@ void WebGPUCommandBuffer::Begin() {
 
     m_CommandEncoder = m_Context.device.CreateCommandEncoder(&encoderDesc);
     if (!m_CommandEncoder) {
-        WEBGPU_LOG_ERROR("Failed to create command encoder");
+        METAGFX_ERROR << "Failed to create command encoder";
     }
 }
 
@@ -61,7 +61,7 @@ void WebGPUCommandBuffer::End() {
     m_CommandEncoder = nullptr;
 
     if (!m_CommandBuffer) {
-        WEBGPU_LOG_ERROR("Failed to finish command buffer");
+        METAGFX_ERROR << "Failed to finish command buffer";
     }
 }
 
@@ -79,6 +79,12 @@ void WebGPUCommandBuffer::BeginRendering(const std::vector<Ref<Texture>>& colorA
         if (colorAttachments[i]) {
             auto webgpuTexture = static_cast<WebGPUTexture*>(colorAttachments[i].get());
             colorAttach.view = webgpuTexture->GetView();
+
+            static bool loggedView = false;
+            if (!loggedView) {
+                METAGFX_INFO << "WebGPU color attachment view: " << colorAttach.view.Get();
+                loggedView = true;
+            }
         }
 
         colorAttach.loadOp = wgpu::LoadOp::Clear;
@@ -90,6 +96,16 @@ void WebGPUCommandBuffer::BeginRendering(const std::vector<Ref<Texture>>& colorA
             colorAttach.clearValue.g = clearValues[i].color[1];
             colorAttach.clearValue.b = clearValues[i].color[2];
             colorAttach.clearValue.a = clearValues[i].color[3];
+
+            static bool loggedClear = false;
+            if (!loggedClear) {
+                METAGFX_INFO << "WebGPU BeginRendering clear color: ("
+                              << colorAttach.clearValue.r << ", "
+                              << colorAttach.clearValue.g << ", "
+                              << colorAttach.clearValue.b << ", "
+                              << colorAttach.clearValue.a << ")";
+                loggedClear = true;
+            }
         } else {
             colorAttach.clearValue = {0.0, 0.0, 0.0, 1.0};
         }
@@ -97,8 +113,14 @@ void WebGPUCommandBuffer::BeginRendering(const std::vector<Ref<Texture>>& colorA
         colorAttachDescs.push_back(colorAttach);
     }
 
-    passDesc.colorAttachmentCount = colorAttachDescs.size();
-    passDesc.colorAttachments = colorAttachDescs.data();
+    // Set color attachments (nullptr for depth-only passes)
+    if (colorAttachDescs.empty()) {
+        passDesc.colorAttachmentCount = 0;
+        passDesc.colorAttachments = nullptr;
+    } else {
+        passDesc.colorAttachmentCount = colorAttachDescs.size();
+        passDesc.colorAttachments = colorAttachDescs.data();
+    }
 
     // Depth attachment
     wgpu::RenderPassDepthStencilAttachment depthAttachDesc{};
@@ -121,8 +143,11 @@ void WebGPUCommandBuffer::BeginRendering(const std::vector<Ref<Texture>>& colorA
     m_RenderPassEncoder = m_CommandEncoder.BeginRenderPass(&passDesc);
 
     if (!m_RenderPassEncoder) {
-        WEBGPU_LOG_ERROR("Failed to begin render pass");
+        METAGFX_ERROR << "Failed to begin render pass";
     }
+
+    // Reset bind group validity for new render pass
+    m_HasValidBindGroup = false;
 }
 
 void WebGPUCommandBuffer::EndRendering() {
@@ -134,7 +159,7 @@ void WebGPUCommandBuffer::EndRendering() {
 
 void WebGPUCommandBuffer::BindPipeline(Ref<Pipeline> pipeline) {
     if (!m_RenderPassEncoder) {
-        WEBGPU_LOG_ERROR("BindPipeline called without active render pass");
+        METAGFX_ERROR << "BindPipeline called without active render pass";
         return;
     }
 
@@ -145,7 +170,7 @@ void WebGPUCommandBuffer::BindPipeline(Ref<Pipeline> pipeline) {
 
 void WebGPUCommandBuffer::SetViewport(const Viewport& viewport) {
     if (!m_RenderPassEncoder) {
-        WEBGPU_LOG_ERROR("SetViewport called without active render pass");
+        METAGFX_ERROR << "SetViewport called without active render pass";
         return;
     }
 
@@ -161,21 +186,21 @@ void WebGPUCommandBuffer::SetViewport(const Viewport& viewport) {
 
 void WebGPUCommandBuffer::SetScissor(const Rect2D& scissor) {
     if (!m_RenderPassEncoder) {
-        WEBGPU_LOG_ERROR("SetScissor called without active render pass");
+        METAGFX_ERROR << "SetScissor called without active render pass";
         return;
     }
 
     m_RenderPassEncoder.SetScissorRect(
-        scissor.offset.x,
-        scissor.offset.y,
-        scissor.extent.width,
-        scissor.extent.height
+        scissor.x,
+        scissor.y,
+        scissor.width,
+        scissor.height
     );
 }
 
 void WebGPUCommandBuffer::BindVertexBuffer(Ref<Buffer> buffer, uint64 offset) {
     if (!m_RenderPassEncoder) {
-        WEBGPU_LOG_ERROR("BindVertexBuffer called without active render pass");
+        METAGFX_ERROR << "BindVertexBuffer called without active render pass";
         return;
     }
 
@@ -185,7 +210,7 @@ void WebGPUCommandBuffer::BindVertexBuffer(Ref<Buffer> buffer, uint64 offset) {
 
 void WebGPUCommandBuffer::BindIndexBuffer(Ref<Buffer> buffer, uint64 offset) {
     if (!m_RenderPassEncoder) {
-        WEBGPU_LOG_ERROR("BindIndexBuffer called without active render pass");
+        METAGFX_ERROR << "BindIndexBuffer called without active render pass";
         return;
     }
 
@@ -208,7 +233,12 @@ void WebGPUCommandBuffer::BindIndexBuffer(Ref<Buffer> buffer, uint64 offset) {
 void WebGPUCommandBuffer::Draw(uint32 vertexCount, uint32 instanceCount,
                                 uint32 firstVertex, uint32 firstInstance) {
     if (!m_RenderPassEncoder) {
-        WEBGPU_LOG_ERROR("Draw called without active render pass");
+        METAGFX_ERROR << "Draw called without active render pass";
+        return;
+    }
+
+    if (!m_HasValidBindGroup) {
+        METAGFX_WARN << "Skipping draw call - no valid bind group bound (resources may not be set)";
         return;
     }
 
@@ -222,7 +252,12 @@ void WebGPUCommandBuffer::DrawIndexed(uint32 indexCount, uint32 instanceCount,
                                        uint32 firstIndex, int32 vertexOffset,
                                        uint32 firstInstance) {
     if (!m_RenderPassEncoder) {
-        WEBGPU_LOG_ERROR("DrawIndexed called without active render pass");
+        METAGFX_ERROR << "DrawIndexed called without active render pass";
+        return;
+    }
+
+    if (!m_HasValidBindGroup) {
+        METAGFX_WARN << "Skipping draw call - no valid bind group bound (resources may not be set)";
         return;
     }
 
@@ -235,7 +270,7 @@ void WebGPUCommandBuffer::DrawIndexed(uint32 indexCount, uint32 instanceCount,
 void WebGPUCommandBuffer::CopyBuffer(Ref<Buffer> src, Ref<Buffer> dst,
                                       uint64 size, uint64 srcOffset, uint64 dstOffset) {
     if (m_RenderPassEncoder) {
-        WEBGPU_LOG_ERROR("CopyBuffer called during active render pass");
+        METAGFX_ERROR << "CopyBuffer called during active render pass";
         return;
     }
 
@@ -254,19 +289,42 @@ void WebGPUCommandBuffer::CopyBuffer(Ref<Buffer> src, Ref<Buffer> dst,
 void WebGPUCommandBuffer::BindDescriptorSet(Ref<Pipeline> pipeline, Ref<DescriptorSet> descriptorSet,
                                               uint32 frameIndex) {
     if (!m_RenderPassEncoder) {
-        WEBGPU_LOG_ERROR("BindDescriptorSet called without active render pass");
+        METAGFX_ERROR << "BindDescriptorSet called without active render pass";
         return;
     }
 
-    // TODO: Implement when WebGPUDescriptorSet is complete
-    WEBGPU_LOG_WARNING("BindDescriptorSet not yet implemented");
+    if (!descriptorSet) {
+        METAGFX_ERROR << "BindDescriptorSet called with null descriptor set";
+        return;
+    }
+
+    // Cast to WebGPU descriptor set to get bind group
+    auto webgpuDescriptorSet = std::static_pointer_cast<WebGPUDescriptorSet>(descriptorSet);
+
+    // If bind group is null, create it now (lazy initialization)
+    wgpu::BindGroup bindGroup = webgpuDescriptorSet->GetBindGroup();
+    if (!bindGroup) {
+        webgpuDescriptorSet->Update();
+        bindGroup = webgpuDescriptorSet->GetBindGroup();
+
+        if (!bindGroup) {
+            METAGFX_ERROR << "Failed to create bind group - resources may not be set";
+            m_HasValidBindGroup = false;
+            return;
+        }
+    }
+
+    // Bind the bind group to the render pass encoder
+    // Group index 0 (first parameter) - all our bindings use group 0
+    m_RenderPassEncoder.SetBindGroup(0, bindGroup, 0, nullptr);
+    m_HasValidBindGroup = true;
 }
 
 void WebGPUCommandBuffer::PushConstants(Ref<Pipeline> pipeline, ShaderStage stages,
                                          uint32 offset, uint32 size, const void* data) {
     // Accumulate push constant data in staging buffer
     if (offset + size > MAX_PUSH_CONSTANT_SIZE) {
-        WEBGPU_LOG_ERROR("Push constant size exceeds maximum: " << (offset + size) << " > " << MAX_PUSH_CONSTANT_SIZE);
+        METAGFX_ERROR << "Push constant size exceeds maximum: " << (offset + size) << " > " << MAX_PUSH_CONSTANT_SIZE;
         return;
     }
 
@@ -280,16 +338,15 @@ void WebGPUCommandBuffer::FlushPushConstants() {
         return;
     }
 
-    // Write accumulated push constant data to GPU buffer
-    m_Context.queue.WriteBuffer(
-        m_PushConstantGPUBuffer,
-        0,
-        m_PushConstantBuffer,
-        m_PushConstantSize
-    );
-
-    // TODO: Bind the push constant buffer as a dynamic uniform buffer
-    // This requires bind group support (will be implemented with WebGPUDescriptorSet)
+    // NOTE: WebGPU doesn't have native push constants.
+    // The application layer handles this by creating uniform buffers and binding them
+    // via descriptor sets (e.g., m_ModelPushConstantBuffer at binding 14).
+    // The PushConstants() calls from the application write to m_PushConstantBuffer,
+    // but this is not automatically uploaded/bound in WebGPU.
+    //
+    // For now, we do nothing here since the application is managing the push constant
+    // buffers directly via CopyData() and BindDescriptorSet() for WebGPU.
+    // This is a known limitation that will be addressed in future refactoring.
 
     // Reset for next draw call
     m_PushConstantSize = 0;

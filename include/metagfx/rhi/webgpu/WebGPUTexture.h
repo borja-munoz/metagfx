@@ -12,6 +12,8 @@ namespace rhi {
 class WebGPUTexture : public Texture {
 public:
     WebGPUTexture(WebGPUContext& context, const TextureDesc& desc);
+    // Constructor for wrapping existing texture (e.g., swap chain surface)
+    WebGPUTexture(WebGPUContext& context, WGPUTexture existingTexture, const TextureDesc& desc);
     ~WebGPUTexture() override;
 
     uint32 GetWidth() const override { return m_Width; }
@@ -23,6 +25,7 @@ public:
     // WebGPU-specific
     wgpu::Texture GetHandle() const { return m_Texture; }
     wgpu::TextureView GetView() const { return m_TextureView; }
+    TextureType GetType() const { return m_Type; }
 
 private:
     void CreateTexture(const TextureDesc& desc);
@@ -31,11 +34,13 @@ private:
     WebGPUContext& m_Context;
     wgpu::Texture m_Texture = nullptr;
     wgpu::TextureView m_TextureView = nullptr;
+    bool m_OwnsTexture = true;  // False for wrapped external textures (e.g., swap chain)
 
     uint32 m_Width = 0;
     uint32 m_Height = 0;
     uint32 m_Depth = 1;
     uint32 m_MipLevels = 1;
+    uint32 m_ArrayLayers = 1;
     Format m_Format = Format::Undefined;
     TextureType m_Type = TextureType::Texture2D;
     TextureUsage m_Usage;

@@ -18,25 +18,34 @@ WebGPUBuffer::WebGPUBuffer(WebGPUContext& context, const BufferDesc& desc)
     // Convert buffer usage flags
     wgpu::BufferUsage usage = ToWebGPUBufferUsage(desc.usage);
 
-    // Add MapWrite usage for CPU-writable buffers
-    if (m_MemoryUsage == MemoryUsage::CPUToGPU || m_MemoryUsage == MemoryUsage::CPUOnly) {
-        usage |= wgpu::BufferUsage::MapWrite;
-    }
+    // WebGPU buffer usage rules:
+    // - MapWrite/MapRead can ONLY be combined with CopySrc/CopyDst
+    // - For CPUToGPU buffers (uniforms, vertex, index), use queue.WriteBuffer() instead of mapping
+    // - Only add MapWrite for staging/readback buffers that don't have other usages
 
-    // Add MapRead usage for CPU-readable buffers
-    if (m_MemoryUsage == MemoryUsage::GPUToCPU || m_MemoryUsage == MemoryUsage::CPUOnly) {
+    // Add MapRead for GPU→CPU readback buffers
+    if (m_MemoryUsage == MemoryUsage::GPUToCPU) {
         usage |= wgpu::BufferUsage::MapRead;
+        usage |= wgpu::BufferUsage::CopyDst;  // Allow GPU to write to this buffer
     }
 
-    // For GPU-only buffers, we need CopyDst to upload data
-    if (m_MemoryUsage == MemoryUsage::GPUOnly) {
-        usage |= wgpu::BufferUsage::CopyDst;
+    // For CPUToGPU and GPUOnly buffers, use queue.WriteBuffer() for uploads
+    // queue.WriteBuffer() requires CopyDst usage
+    if (m_MemoryUsage == MemoryUsage::CPUToGPU || m_MemoryUsage == MemoryUsage::GPUOnly) {
+        usage |= wgpu::BufferUsage::CopyDst;  // Required for queue.WriteBuffer()
+    }
+
+    // WebGPU requires uniform buffer sizes to be multiples of minUniformBufferOffsetAlignment (256 bytes)
+    m_AllocatedSize = m_Size;
+    if (static_cast<int>(desc.usage) & static_cast<int>(BufferUsage::Uniform)) {
+        const uint64 alignment = m_Context.minUniformBufferOffsetAlignment;  // Usually 256
+        m_AllocatedSize = ((m_Size + alignment - 1) / alignment) * alignment;
     }
 
     // Create buffer descriptor
     wgpu::BufferDescriptor bufferDesc{};
     bufferDesc.label = desc.debugName ? desc.debugName : "Buffer";
-    bufferDesc.size = m_Size;
+    bufferDesc.size = m_AllocatedSize;
     bufferDesc.usage = usage;
     bufferDesc.mappedAtCreation = false;
 
@@ -44,7 +53,7 @@ WebGPUBuffer::WebGPUBuffer(WebGPUContext& context, const BufferDesc& desc)
     m_Buffer = m_Context.device.CreateBuffer(&bufferDesc);
 
     if (!m_Buffer) {
-        WEBGPU_LOG_ERROR("Failed to create buffer");
+        METAGFX_ERROR << "Failed to create buffer";
         throw std::runtime_error("Failed to create WebGPU buffer");
     }
 }
@@ -71,27 +80,35 @@ void* WebGPUBuffer::Map() {
     MapData mapData;
 
     // Determine map mode based on memory usage
+    // Note: In WebGPU, CPUToGPU buffers (uniforms, vertex, index) cannot be mapped
+    // They use queue.WriteBuffer() instead
     wgpu::MapMode mapMode = wgpu::MapMode::None;
-    if (m_MemoryUsage == MemoryUsage::CPUToGPU || m_MemoryUsage == MemoryUsage::CPUOnly) {
-        mapMode = wgpu::MapMode::Write;
-    } else if (m_MemoryUsage == MemoryUsage::GPUToCPU) {
+    if (m_MemoryUsage == MemoryUsage::GPUToCPU) {
         mapMode = wgpu::MapMode::Read;
     } else {
-        WEBGPU_LOG_ERROR("Cannot map GPU-only buffer");
+        METAGFX_ERROR << "Cannot map buffer with memory usage: " << static_cast<int>(m_MemoryUsage)
+                        << " (CPUToGPU buffers use queue.WriteBuffer instead)";
         return nullptr;
     }
 
-    // Request buffer mapping
-    auto callback = [](WGPUBufferMapAsyncStatus status, void* userdata) {
-        auto* data = static_cast<MapData*>(userdata);
+    // Request buffer mapping using modern Dawn API
+    auto callback = [](WGPUMapAsyncStatus status, WGPUStringView message, void* userdata1, void* /* userdata2 */) {
+        auto* data = static_cast<MapData*>(userdata1);
         data->done = true;
 
-        if (status != WGPUBufferMapAsyncStatus_Success) {
-            METAGFX_ERROR << "Buffer mapping failed with status: " << static_cast<int>(status);
+        if (status != WGPUMapAsyncStatus_Success) {
+            const char* msgStr = message.data ? message.data : "Unknown error";
+            METAGFX_ERROR << "Buffer mapping failed with status: " << static_cast<int>(status) << ", message: " << msgStr;
         }
     };
 
-    m_Buffer.MapAsync(mapMode, 0, m_Size, callback, &mapData);
+    WGPUBufferMapCallbackInfo callbackInfo{};
+    callbackInfo.mode = WGPUCallbackMode_AllowProcessEvents;
+    callbackInfo.callback = callback;
+    callbackInfo.userdata1 = &mapData;
+
+    WGPUBuffer buffer = m_Buffer.Get();
+    wgpuBufferMapAsync(buffer, static_cast<WGPUMapMode>(mapMode), 0, m_Size, callbackInfo);
 
     // Wait for mapping to complete (blocking on native platforms)
 #ifndef __EMSCRIPTEN__
@@ -101,7 +118,7 @@ void* WebGPUBuffer::Map() {
 #endif
 
     if (!mapData.done) {
-        WEBGPU_LOG_ERROR("Buffer mapping timed out");
+        METAGFX_ERROR << "Buffer mapping timed out";
         return nullptr;
     }
 
@@ -113,7 +130,7 @@ void* WebGPUBuffer::Map() {
     }
 
     if (!m_MappedData) {
-        WEBGPU_LOG_ERROR("Failed to get mapped range");
+        METAGFX_ERROR << "Failed to get mapped range";
         return nullptr;
     }
 
@@ -137,8 +154,8 @@ void WebGPUBuffer::CopyData(const void* data, uint64 size, uint64 offset) {
     }
 
     if (offset + size > m_Size) {
-        WEBGPU_LOG_ERROR("Buffer copy out of bounds: offset=" << offset
-                        << ", size=" << size << ", buffer size=" << m_Size);
+        METAGFX_ERROR << "Buffer copy out of bounds: offset=" << offset
+                        << ", size=" << size << ", buffer size=" << m_Size;
         return;
     }
 

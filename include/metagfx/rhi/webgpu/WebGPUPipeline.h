@@ -16,7 +16,6 @@ public:
 
     // WebGPU-specific
     wgpu::RenderPipeline GetRenderPipeline() const { return m_RenderPipeline; }
-    wgpu::PipelineLayout GetPipelineLayout() const { return m_PipelineLayout; }
 
     wgpu::PrimitiveTopology GetPrimitiveTopology() const { return m_PrimitiveTopology; }
     wgpu::CullMode GetCullMode() const { return m_CullMode; }
@@ -25,7 +24,6 @@ public:
 private:
     WebGPUContext& m_Context;
     wgpu::RenderPipeline m_RenderPipeline = nullptr;
-    wgpu::PipelineLayout m_PipelineLayout = nullptr;
 
     wgpu::PrimitiveTopology m_PrimitiveTopology = wgpu::PrimitiveTopology::TriangleList;
     wgpu::CullMode m_CullMode = wgpu::CullMode::Back;

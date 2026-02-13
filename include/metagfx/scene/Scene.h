@@ -3,6 +3,7 @@
 #include "metagfx/core/Types.h"
 #include "metagfx/scene/Light.h"
 #include "metagfx/rhi/Buffer.h"
+#include "metagfx/rhi/Types.h"
 #include <vector>
 #include <memory>
 
@@ -28,7 +29,7 @@ public:
     size_t GetLightCount() const { return m_Lights.size(); }
 
     // GPU buffer management
-    void InitializeLightBuffer(rhi::GraphicsDevice* device);
+    void InitializeLightBuffer(rhi::GraphicsDevice* device, rhi::GraphicsAPI api);
     void UpdateLightBuffer();  // Call per frame before rendering
     Ref<rhi::Buffer> GetLightBuffer() const { return m_LightBuffer; }
 

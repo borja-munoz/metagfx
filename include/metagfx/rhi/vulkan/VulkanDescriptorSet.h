@@ -31,7 +31,7 @@ struct DescriptorBinding {
 class VulkanDescriptorSet : public DescriptorSet {
 public:
     // Constructor from backend-agnostic descriptor set description
-    VulkanDescriptorSet(VulkanContext& context, const DescriptorSetDesc& desc);
+    VulkanDescriptorSet(VulkanContext& context, const DescriptorSetDesc& desc, uint32 numFrames = MAX_FRAMES);
 
     // Legacy constructor for backward compatibility
     VulkanDescriptorSet(VulkanContext& context, const std::vector<DescriptorBinding>& bindings);
@@ -41,6 +41,7 @@ public:
     // DescriptorSet interface implementation
     void UpdateBuffer(uint32 binding, Ref<Buffer> buffer) override;
     void UpdateTexture(uint32 binding, Ref<Texture> texture, Ref<Sampler> sampler) override;
+    void Update() override;
     void* GetNativeHandle(uint32 frameIndex) const override;
     void* GetNativeLayout() const override;
 
@@ -62,6 +63,7 @@ private:
     VkDescriptorPool m_Pool = VK_NULL_HANDLE;
     std::vector<VkDescriptorSet> m_DescriptorSets;
     std::vector<DescriptorBinding> m_Bindings;
+    uint32 m_NumFrames = MAX_FRAMES;  // Number of internal descriptor sets to create
 
     static constexpr uint32 MAX_FRAMES = 2;
 };

@@ -3,7 +3,9 @@
 // ============================================================================
 #include "metagfx/rhi/webgpu/WebGPUPipeline.h"
 #include "metagfx/rhi/webgpu/WebGPUShader.h"
+#include "metagfx/rhi/webgpu/WebGPUDescriptorSet.h"
 #include "metagfx/core/Logger.h"
+#include <map>
 
 namespace metagfx {
 namespace rhi {
@@ -16,23 +18,23 @@ WebGPUPipeline::WebGPUPipeline(WebGPUContext& context, const PipelineDesc& desc)
     m_CullMode = ToWebGPUCullMode(desc.rasterization.cullMode);
     m_FrontFace = ToWebGPUFrontFace(desc.rasterization.frontFace);
 
-    // Create pipeline layout (for now, use empty layout)
-    // TODO: Add bind group layouts from descriptor sets
-    wgpu::PipelineLayoutDescriptor layoutDesc{};
-    layoutDesc.label = "Pipeline Layout";
-    layoutDesc.bindGroupLayoutCount = 0;
-    layoutDesc.bindGroupLayouts = nullptr;
+    // Create pipeline layout from descriptor set layout (if provided)
+    wgpu::PipelineLayout pipelineLayout = nullptr;
+    if (desc.descriptorSetLayout) {
+        auto webgpuDescSet = std::static_pointer_cast<WebGPUDescriptorSet>(desc.descriptorSetLayout);
+        wgpu::BindGroupLayout bindGroupLayout = webgpuDescSet->GetBindGroupLayout();
 
-    m_PipelineLayout = m_Context.device.CreatePipelineLayout(&layoutDesc);
-    if (!m_PipelineLayout) {
-        WEBGPU_LOG_ERROR("Failed to create pipeline layout");
-        throw std::runtime_error("Failed to create WebGPU pipeline layout");
+        wgpu::PipelineLayoutDescriptor layoutDesc{};
+        layoutDesc.label = "Pipeline Layout";
+        layoutDesc.bindGroupLayoutCount = 1;
+        layoutDesc.bindGroupLayouts = &bindGroupLayout;
+        pipelineLayout = m_Context.device.CreatePipelineLayout(&layoutDesc);
     }
 
     // Create render pipeline descriptor
     wgpu::RenderPipelineDescriptor pipelineDesc{};
     pipelineDesc.label = "Render Pipeline";
-    pipelineDesc.layout = m_PipelineLayout;
+    pipelineDesc.layout = pipelineLayout;  // Use explicit layout or nullptr for automatic
 
     // Vertex state
     wgpu::VertexState vertexState{};
@@ -139,8 +141,17 @@ WebGPUPipeline::WebGPUPipeline(WebGPUContext& context, const PipelineDesc& desc)
         fragmentState.module = webgpuShader->GetModule();
         fragmentState.entryPoint = webgpuShader->GetEntryPoint().c_str();
 
+        // Determine if this is a depth-only pass (no color outputs)
+        // Depth-only passes have depth enabled but no color attachments
+        bool isDepthOnly = desc.colorAttachments.empty() &&
+                          (desc.depthStencil.depthTestEnable || desc.depthStencil.depthWriteEnable);
+
         // Color targets
-        if (desc.colorAttachments.empty()) {
+        if (isDepthOnly) {
+            // Depth-only rendering (e.g., shadow maps) - no color targets
+            fragmentState.targetCount = 0;
+            fragmentState.targets = nullptr;
+        } else if (desc.colorAttachments.empty()) {
             // Default: one color attachment with BGRA8
             colorTarget.format = wgpu::TextureFormat::BGRA8Unorm;
             colorTarget.writeMask = wgpu::ColorWriteMask::All;
@@ -176,16 +187,15 @@ WebGPUPipeline::WebGPUPipeline(WebGPUContext& context, const PipelineDesc& desc)
     m_RenderPipeline = m_Context.device.CreateRenderPipeline(&pipelineDesc);
 
     if (!m_RenderPipeline) {
-        WEBGPU_LOG_ERROR("Failed to create render pipeline");
+        METAGFX_ERROR << "Failed to create render pipeline";
         throw std::runtime_error("Failed to create WebGPU render pipeline");
     }
 
-    WEBGPU_LOG_INFO("WebGPU render pipeline created successfully");
+    METAGFX_INFO << "WebGPU render pipeline created successfully";
 }
 
 WebGPUPipeline::~WebGPUPipeline() {
     m_RenderPipeline = nullptr;
-    m_PipelineLayout = nullptr;
 }
 
 } // namespace rhi

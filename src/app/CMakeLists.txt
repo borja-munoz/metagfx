@@ -8,6 +8,7 @@ set(APP_SOURCES
 
 set(APP_HEADERS
     Application.h
+    BindingLayout.h
 )
 
 add_executable(metagfx ${APP_SOURCES} ${APP_HEADERS})
@@ -28,6 +29,18 @@ target_link_libraries(metagfx
         SDL3::SDL3
         imgui_backends  # ImGui with SDL3 and Vulkan backends
 )
+
+# WebGPU/Dawn requires Objective-C runtime and system frameworks on macOS
+if(METAGFX_USE_WEBGPU AND APPLE)
+    target_link_libraries(metagfx PRIVATE
+        "-framework Foundation"
+        "-framework QuartzCore"
+        "-framework Metal"
+        "-framework IOSurface"
+        "-framework IOKit"
+        "-framework CoreGraphics"
+        objc)
+endif()
 
 # Copy SDL3 DLL on Windows
 if(WIN32)

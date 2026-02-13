@@ -39,6 +39,12 @@ void MetalDescriptorSet::UpdateTexture(uint32 binding, Ref<Texture> texture, Ref
     }
 }
 
+void MetalDescriptorSet::Update() {
+    // Metal binds resources directly to the encoder in ApplyToEncoder()
+    // This is a no-op for Metal but required by the DescriptorSet interface
+    // for backends like WebGPU that need explicit bind group rebuilding
+}
+
 void* MetalDescriptorSet::GetNativeHandle(uint32 frameIndex) const {
     // Metal doesn't have descriptor set handles
     // Return this pointer as an identifier

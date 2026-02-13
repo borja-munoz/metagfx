@@ -81,6 +81,50 @@ if(METAGFX_USE_METAL AND APPLE)
     )
 endif()
 
+# WebGPU-specific sources (must be before add_library)
+if(METAGFX_USE_WEBGPU)
+    list(APPEND RHI_SOURCES
+        webgpu/WebGPUTypes.cpp
+        webgpu/WebGPUDevice.cpp
+        webgpu/WebGPUSwapChain.cpp
+        webgpu/WebGPUBuffer.cpp
+        webgpu/WebGPUTexture.cpp
+        webgpu/WebGPUSampler.cpp
+        webgpu/WebGPUShader.cpp
+        webgpu/WebGPUPipeline.cpp
+        webgpu/WebGPUCommandBuffer.cpp
+        webgpu/WebGPUDescriptorSet.cpp
+        webgpu/WebGPUFramebuffer.cpp
+        webgpu/WebGPUSurfaceBridge.cpp
+    )
+
+    # Platform-specific surface bridges
+    if(WIN32)
+        list(APPEND RHI_SOURCES webgpu/WebGPUSurfaceBridge_Windows.cpp)
+    elseif(APPLE)
+        list(APPEND RHI_SOURCES webgpu/WebGPUSurfaceBridge_Metal.mm)
+    elseif(EMSCRIPTEN)
+        list(APPEND RHI_SOURCES webgpu/WebGPUSurfaceBridge_Web.cpp)
+    elseif(UNIX)
+        list(APPEND RHI_SOURCES webgpu/WebGPUSurfaceBridge_Linux.cpp)
+    endif()
+
+    list(APPEND RHI_HEADERS
+        ${CMAKE_SOURCE_DIR}/include/metagfx/rhi/webgpu/WebGPUTypes.h
+        ${CMAKE_SOURCE_DIR}/include/metagfx/rhi/webgpu/WebGPUDevice.h
+        ${CMAKE_SOURCE_DIR}/include/metagfx/rhi/webgpu/WebGPUSwapChain.h
+        ${CMAKE_SOURCE_DIR}/include/metagfx/rhi/webgpu/WebGPUBuffer.h
+        ${CMAKE_SOURCE_DIR}/include/metagfx/rhi/webgpu/WebGPUTexture.h
+        ${CMAKE_SOURCE_DIR}/include/metagfx/rhi/webgpu/WebGPUSampler.h
+        ${CMAKE_SOURCE_DIR}/include/metagfx/rhi/webgpu/WebGPUShader.h
+        ${CMAKE_SOURCE_DIR}/include/metagfx/rhi/webgpu/WebGPUPipeline.h
+        ${CMAKE_SOURCE_DIR}/include/metagfx/rhi/webgpu/WebGPUCommandBuffer.h
+        ${CMAKE_SOURCE_DIR}/include/metagfx/rhi/webgpu/WebGPUDescriptorSet.h
+        ${CMAKE_SOURCE_DIR}/include/metagfx/rhi/webgpu/WebGPUFramebuffer.h
+        ${CMAKE_SOURCE_DIR}/include/metagfx/rhi/webgpu/WebGPUSurfaceBridge.h
+    )
+endif()
+
 add_library(metagfx_rhi STATIC ${RHI_SOURCES} ${RHI_HEADERS})
 
 target_include_directories(metagfx_rhi
@@ -144,64 +188,85 @@ if(METAGFX_USE_METAL)
     endif()
 endif()
 
-# WebGPU (all platforms via Dawn)
+# WebGPU (all platforms via Dawn) - Link configuration
 if(METAGFX_USE_WEBGPU)
-    list(APPEND RHI_SOURCES
-        webgpu/WebGPUTypes.cpp
-        webgpu/WebGPUDevice.cpp
-        webgpu/WebGPUSwapChain.cpp
-        webgpu/WebGPUBuffer.cpp
-        webgpu/WebGPUTexture.cpp
-        webgpu/WebGPUSampler.cpp
-        webgpu/WebGPUShader.cpp
-        webgpu/WebGPUPipeline.cpp
-        webgpu/WebGPUCommandBuffer.cpp
-        webgpu/WebGPUDescriptorSet.cpp
-        webgpu/WebGPUFramebuffer.cpp
-        webgpu/WebGPUSurfaceBridge.cpp
-    )
-
-    # Platform-specific surface bridges
-    if(WIN32)
-        list(APPEND RHI_SOURCES webgpu/WebGPUSurfaceBridge_Windows.cpp)
-    elseif(APPLE)
-        list(APPEND RHI_SOURCES webgpu/WebGPUSurfaceBridge_Metal.mm)
-    elseif(EMSCRIPTEN)
-        list(APPEND RHI_SOURCES webgpu/WebGPUSurfaceBridge_Web.cpp)
-    elseif(UNIX)
-        list(APPEND RHI_SOURCES webgpu/WebGPUSurfaceBridge_Linux.cpp)
-    endif()
-
-    list(APPEND RHI_HEADERS
-        ${CMAKE_SOURCE_DIR}/include/metagfx/rhi/webgpu/WebGPUTypes.h
-        ${CMAKE_SOURCE_DIR}/include/metagfx/rhi/webgpu/WebGPUDevice.h
-        ${CMAKE_SOURCE_DIR}/include/metagfx/rhi/webgpu/WebGPUSwapChain.h
-        ${CMAKE_SOURCE_DIR}/include/metagfx/rhi/webgpu/WebGPUBuffer.h
-        ${CMAKE_SOURCE_DIR}/include/metagfx/rhi/webgpu/WebGPUTexture.h
-        ${CMAKE_SOURCE_DIR}/include/metagfx/rhi/webgpu/WebGPUSampler.h
-        ${CMAKE_SOURCE_DIR}/include/metagfx/rhi/webgpu/WebGPUShader.h
-        ${CMAKE_SOURCE_DIR}/include/metagfx/rhi/webgpu/WebGPUPipeline.h
-        ${CMAKE_SOURCE_DIR}/include/metagfx/rhi/webgpu/WebGPUCommandBuffer.h
-        ${CMAKE_SOURCE_DIR}/include/metagfx/rhi/webgpu/WebGPUDescriptorSet.h
-        ${CMAKE_SOURCE_DIR}/include/metagfx/rhi/webgpu/WebGPUFramebuffer.h
-        ${CMAKE_SOURCE_DIR}/include/metagfx/rhi/webgpu/WebGPUSurfaceBridge.h
-    )
-
-    # Add Dawn and SPIRV-Cross include paths
+    # Add Dawn (includes Tint) and SPIRV-Cross include paths
     target_include_directories(metagfx_rhi
         PUBLIC
-            /Users/Borja/dev/dawn/dawn_install/include  # Dawn headers (webgpu/webgpu_cpp.h)
+            /Users/Borja/dev/dawn/dawn_install/include  # Dawn and Tint headers
         PRIVATE
             ${CMAKE_SOURCE_DIR}/external/SPIRV-Cross
     )
 
     # Link Dawn, Tint, and SPIRV-Cross
-    # Dawn is found via find_package() and provides webgpu_dawn and libtint targets
+    # Use absolute paths for Dawn/Tint libraries to avoid CMake target resolution issues
+    # Order matters: libraries must come before their dependencies
     target_link_libraries(metagfx_rhi
-        PUBLIC
-            webgpu_dawn          # Dawn WebGPU C++ bindings
         PRIVATE
-            libtint              # Tint for SPIR-V → WGSL transpilation (part of Dawn)
+            /Users/Borja/dev/dawn/dawn_install/lib/libwebgpu_dawn.a
+
+            # Tint SPIR-V → WGSL transpilation libraries
+            # High-level API
+            /Users/Borja/dev/dawn/dawn_install/lib/libtint_api.a
+
+            # WGSL writer (IR → WGSL)
+            /Users/Borja/dev/dawn/dawn_install/lib/libtint_lang_wgsl_writer.a
+            /Users/Borja/dev/dawn/dawn_install/lib/libtint_lang_wgsl_writer_raise.a
+            /Users/Borja/dev/dawn/dawn_install/lib/libtint_lang_wgsl_writer_ir_to_program.a
+            /Users/Borja/dev/dawn/dawn_install/lib/libtint_lang_wgsl_writer_ast_printer.a
+            /Users/Borja/dev/dawn/dawn_install/lib/libtint_lang_wgsl_writer_common.a
+
+            # SPIR-V reader (SPIR-V → IR) - NEW: Added main reader libraries
+            /Users/Borja/dev/dawn/dawn_install/lib/libtint_lang_spirv_reader.a
+            /Users/Borja/dev/dawn/dawn_install/lib/libtint_lang_spirv_reader_parser.a
+            /Users/Borja/dev/dawn/dawn_install/lib/libtint_lang_spirv_reader_lower.a
+            /Users/Borja/dev/dawn/dawn_install/lib/libtint_lang_spirv_reader_common.a
+            /Users/Borja/dev/dawn/dawn_install/lib/libtint_lang_spirv_validate.a
+            /Users/Borja/dev/dawn/dawn_install/lib/libtint_lang_spirv.a
+            /Users/Borja/dev/dawn/dawn_install/lib/libtint_lang_spirv_ir.a
+            /Users/Borja/dev/dawn/dawn_install/lib/libtint_lang_spirv_type.a
+            /Users/Borja/dev/dawn/dawn_install/lib/libtint_lang_spirv_intrinsic.a
+
+            # WGSL language support
+            /Users/Borja/dev/dawn/dawn_install/lib/libtint_lang_wgsl.a
+            /Users/Borja/dev/dawn/dawn_install/lib/libtint_lang_wgsl_program.a
+            /Users/Borja/dev/dawn/dawn_install/lib/libtint_lang_wgsl_resolver.a
+            /Users/Borja/dev/dawn/dawn_install/lib/libtint_lang_wgsl_sem.a
+            /Users/Borja/dev/dawn/dawn_install/lib/libtint_lang_wgsl_ast.a
+            /Users/Borja/dev/dawn/dawn_install/lib/libtint_lang_wgsl_intrinsic.a
+            /Users/Borja/dev/dawn/dawn_install/lib/libtint_lang_wgsl_ir.a
+
+            # Core IR
+            /Users/Borja/dev/dawn/dawn_install/lib/libtint_lang_core_ir.a
+            /Users/Borja/dev/dawn/dawn_install/lib/libtint_lang_core_ir_transform.a
+            /Users/Borja/dev/dawn/dawn_install/lib/libtint_lang_core_ir_analysis.a
+            /Users/Borja/dev/dawn/dawn_install/lib/libtint_lang_core_ir_binary.a
+            /Users/Borja/dev/dawn/dawn_install/lib/libtint_lang_core_ir_type.a
+
+            # Core language support
+            /Users/Borja/dev/dawn/dawn_install/lib/libtint_lang_core.a
+            /Users/Borja/dev/dawn/dawn_install/lib/libtint_lang_core_type.a
+            /Users/Borja/dev/dawn/dawn_install/lib/libtint_lang_core_constant.a
+            /Users/Borja/dev/dawn/dawn_install/lib/libtint_lang_core_intrinsic.a
+
+            # Utilities
+            /Users/Borja/dev/dawn/dawn_install/lib/libtint_utils.a
+            /Users/Borja/dev/dawn/dawn_install/lib/libtint_utils_text.a
+            /Users/Borja/dev/dawn/dawn_install/lib/libtint_utils_text_generator.a
+            /Users/Borja/dev/dawn/dawn_install/lib/libtint_utils_diagnostic.a
+            /Users/Borja/dev/dawn/dawn_install/lib/libtint_utils_ice.a
+            /Users/Borja/dev/dawn/dawn_install/lib/libtint_utils_rtti.a
+            /Users/Borja/dev/dawn/dawn_install/lib/libtint_utils_symbol.a
+            /Users/Borja/dev/dawn/dawn_install/lib/libtint_utils_containers.a
+            /Users/Borja/dev/dawn/dawn_install/lib/libtint_utils_math.a
+            /Users/Borja/dev/dawn/dawn_install/lib/libtint_utils_memory.a
+            /Users/Borja/dev/dawn/dawn_install/lib/libtint_utils_bytes.a
+            /Users/Borja/dev/dawn/dawn_install/lib/libtint_utils_command.a
+            /Users/Borja/dev/dawn/dawn_install/lib/libtint_utils_file.a
+            /Users/Borja/dev/dawn/dawn_install/lib/libtint_utils_macros.a
+            /Users/Borja/dev/dawn/dawn_install/lib/libtint_utils_strconv.a
+            /Users/Borja/dev/dawn/dawn_install/lib/libtint_utils_system.a
+
             spirv-cross-glsl     # Keep for analysis/fallback
     )
 

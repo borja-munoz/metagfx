@@ -61,6 +61,24 @@ Comprehensive Metal backend implementation guide:
 
 ---
 
+#### [WebGPU Implementation](webgpu.md)
+**Topics**: WebGPU backend with Google's Dawn
+
+Complete WebGPU backend implementation guide:
+- Google's Dawn C++ implementation (native + web)
+- Shader compilation (SPIR-V → WGSL with SPIRV-Cross)
+- Bind group resource binding model
+- Push constants emulation via small uniform buffer
+- Cubemap texture upload (per-face-per-mip with row alignment)
+- Platform surface bridges (CAMetalLayer on macOS)
+- Device initialization async/callback pattern
+- Device-lost callback and shutdown handling
+- Coordinate system (same as Vulkan, no Y-flip needed)
+- ImGui WebGPU backend integration
+- Full feature parity with Vulkan and Metal backends
+
+---
+
 ### Feature Documentation
 
 #### [Camera and Transformation System](camera_transformation_system.md)
@@ -235,8 +253,10 @@ Per-milestone implementation notes and artifacts:
 
 **Architecture**:
 1. [RHI Design](rhi.md) - Graphics abstraction layer
-2. [Vulkan Implementation](vulkan.md) - Backend specifics
-3. [Modern Graphics APIs](modern_graphics_apis.md) - Underlying concepts
+2. [Vulkan Implementation](vulkan.md) - Vulkan backend specifics
+3. [Metal Implementation](metal.md) - Metal backend specifics
+4. [WebGPU Implementation](webgpu.md) - WebGPU backend specifics
+5. [Modern Graphics APIs](modern_graphics_apis.md) - Underlying concepts
 
 **Features**:
 1. [Camera System](camera_transformation_system.md) - Viewport and controls
@@ -295,10 +315,11 @@ cd bin
 ```
 
 ### Project Status
-**Current Milestone**: 4.1 (Metal Backend Implementation) ✅ Complete
+**Current Milestone**: 4.2 (WebGPU Backend Implementation) ✅ Complete
 **Implemented Features**:
 - ✅ **Vulkan backend** (Windows, Linux, macOS)
-- ✅ **Metal backend** (macOS, iOS-ready) - **NEW**
+- ✅ **Metal backend** (macOS, iOS-ready)
+- ✅ **WebGPU backend** (Windows, macOS, Linux, Web) - **NEW**
 - ✅ Camera system with FPS controls and orbital mode
 - ✅ Model loading (OBJ, FBX, glTF, COLLADA)
 - ✅ Runtime model switching with deferred deletion
@@ -311,11 +332,10 @@ cd bin
 - ✅ Texture system (albedo, normal, metallic-roughness, AO, emissive)
 - ✅ Light system (directional, point, spot lights - up to 16 lights)
 - ✅ Shadow mapping with PCF filtering
-- ✅ Skybox rendering with LOD control
-- ✅ ImGui integration (Vulkan + Metal backends)
+- ✅ Skybox rendering with LOD control (cubemap, all 6 faces)
+- ✅ ImGui integration (Vulkan + Metal + WebGPU backends)
 
 **Next Milestones**:
-- 4.2: WebGPU Implementation (cross-platform, web)
 - 4.3: Rendering Optimizations (frustum culling, LOD, instancing)
 - 5.1: PBRT Scene Parser
 - 8.1: Direct3D 12 Implementation (Windows) - Postponed to Phase 8
@@ -326,6 +346,7 @@ cd bin
 | `include/metagfx/rhi/*.h` | RHI abstract interfaces |
 | `src/rhi/vulkan/*.cpp` | Vulkan backend implementation |
 | `src/rhi/metal/*.cpp` | Metal backend implementation |
+| `src/rhi/webgpu/*.cpp` | WebGPU backend implementation |
 | `include/metagfx/scene/*.h` | Scene management (Camera, Mesh, Model) |
 | `src/app/Application.cpp` | Main application and rendering loop |
 | `src/app/*.vert`, `*.frag` | GLSL shaders (compiled to SPIR-V) |
@@ -354,7 +375,7 @@ cd bin
 
 Future documentation needs:
 - [x] Metal implementation guide ✅ Complete (Milestone 4.1)
-- [ ] WebGPU implementation guide (Milestone 4.2 - next priority)
+- [x] WebGPU implementation guide ✅ Complete (Milestone 4.2)
 - [ ] Rendering optimizations guide (Milestone 4.3)
 - [ ] D3D12 implementation guide (Milestone 8.1 - postponed to Phase 8)
 - [x] Texture system design ✅ Complete (Milestone 2.3)

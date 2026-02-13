@@ -28,6 +28,11 @@ public:
     // Update a texture + sampler binding
     virtual void UpdateTexture(uint32 binding, Ref<Texture> texture, Ref<Sampler> sampler) = 0;
 
+    // Finalize all updates and rebuild the descriptor set
+    // This must be called after all UpdateBuffer/UpdateTexture calls are complete
+    // before binding the descriptor set to a command buffer
+    virtual void Update() = 0;
+
     // Get the descriptor set for a specific frame (for double/triple buffering)
     // Returns backend-specific handle that can be used with command buffers
     virtual void* GetNativeHandle(uint32 frameIndex) const = 0;

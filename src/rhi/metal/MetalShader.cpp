@@ -8,6 +8,7 @@
 #include <spirv_msl.hpp>
 
 #include <vector>
+#include <fstream>
 
 namespace metagfx {
 namespace rhi {
@@ -112,6 +113,17 @@ MetalShader::MetalShader(MetalContext& context, const ShaderDesc& desc)
         }
     }
     METAGFX_INFO << "=== END MSL Shader " << shaderCount << " ===";
+
+    // DEBUG: Write fragment shader source to file for inspection
+    if (desc.stage == ShaderStage::Fragment) {
+        std::string filename = "/tmp/fragment_shader_" + std::to_string(shaderCount) + ".msl";
+        std::ofstream debugFile(filename);
+        if (debugFile.is_open()) {
+            debugFile << mslSource;
+            debugFile.close();
+            METAGFX_INFO << "Written fragment shader #" << shaderCount << " to " << filename;
+        }
+    }
 
     // Create Metal library from MSL source
     NS::Error* error = nullptr;

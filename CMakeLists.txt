@@ -2,7 +2,13 @@
 # Root CMakeLists.txt
 # ============================================================================
 cmake_minimum_required(VERSION 3.20)
-project(metagfx VERSION 0.1.0 LANGUAGES CXX)
+
+# Enable Objective-C++ on Apple platforms (needed for Metal and WebGPU backends)
+if(APPLE)
+    project(metagfx VERSION 0.1.0 LANGUAGES CXX OBJCXX)
+else()
+    project(metagfx VERSION 0.1.0 LANGUAGES CXX)
+endif()
 
 # C++ Standard
 set(CMAKE_CXX_STANDARD 20)
@@ -13,8 +19,14 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 option(METAGFX_BUILD_TESTS "Build tests" OFF)
 option(METAGFX_USE_VULKAN "Enable Vulkan support" ON)
 option(METAGFX_USE_D3D12 "Enable Direct3D 12 support" OFF)
-option(METAGFX_USE_METAL "Enable Metal support" OFF)
-option(METAGFX_USE_WEBGPU "Enable WebGPU support" OFF)
+option(METAGFX_USE_METAL "Enable Metal support" ON)
+option(METAGFX_USE_WEBGPU "Enable WebGPU support" ON)
+
+# If WebGPU is enabled and DAWN_DIR is set, add Dawn library path globally
+# This is needed because metagfx_rhi.a contains WebGPU symbols that need resolving
+if(METAGFX_USE_WEBGPU AND DAWN_DIR)
+    link_directories(${DAWN_DIR}/lib)
+endif()
 
 # Platform detection
 if(WIN32)

@@ -163,6 +163,8 @@ void VulkanDevice::CreateLogicalDevice() {
     // Device features
     VkPhysicalDeviceFeatures deviceFeatures{};
     deviceFeatures.fillModeNonSolid = VK_TRUE; // For wireframe mode
+    deviceFeatures.fragmentStoresAndAtomics = VK_TRUE; // Required for storage buffers in fragment shaders
+    deviceFeatures.vertexPipelineStoresAndAtomics = VK_TRUE; // Required for storage buffers in vertex shaders
 
     // NOTE: Dynamic rendering causes issues with MoltenVK on macOS
     // We'll use traditional render passes for now
@@ -217,7 +219,8 @@ Ref<Framebuffer> VulkanDevice::CreateFramebuffer(const FramebufferDesc& desc) {
 }
 
 Ref<DescriptorSet> VulkanDevice::CreateDescriptorSet(const DescriptorSetDesc& desc) {
-    return CreateRef<VulkanDescriptorSet>(m_Context, desc);
+    // Use numFrames=1 to disable internal double-buffering since we handle it at Application level
+    return CreateRef<VulkanDescriptorSet>(m_Context, desc, 1);
 }
 
 void VulkanDevice::SetActiveDescriptorSetLayout(Ref<DescriptorSet> descriptorSet) {

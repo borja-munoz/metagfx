@@ -8,8 +8,8 @@ The **Render Hardware Interface (RHI)** is an abstraction layer that allows the 
 All interfaces use common terminology that maps naturally to all target APIs:
 - **Vulkan**: Direct mapping to VkDevice, VkBuffer, VkCommandBuffer, etc. ✅ **Implemented**
 - **Metal**: Maps to MTL::Device, MTL::Buffer, MTL::CommandBuffer (via metal-cpp) ✅ **Implemented**
+- **WebGPU**: Maps to wgpu::Device, wgpu::Buffer, wgpu::CommandEncoder (Dawn) ✅ **Implemented**
 - **D3D12**: Maps to ID3D12Device, ID3D12Resource, ID3D12GraphicsCommandList (planned)
-- **WebGPU**: Maps to GPUDevice, GPUBuffer, GPUCommandEncoder (planned)
 
 ### 2. Modern Graphics Concepts
 - Explicit resource lifetimes (no hidden state)
@@ -135,7 +135,8 @@ include/metagfx/rhi/
 src/rhi/
 ├── GraphicsDevice.cpp   (Factory function implementation)
 ├── vulkan/              (Vulkan backend - see vulkan.md)
-└── metal/               (Metal backend - see metal.md)
+├── metal/               (Metal backend - see metal.md)
+└── webgpu/              (WebGPU backend - see webgpu.md)
 ```
 
 ## Backend Implementations
@@ -162,10 +163,17 @@ The RHI has been successfully implemented for multiple graphics APIs, demonstrat
   - Automatic memory coherence
   - Xcode Metal Frame Debugger support
 
-### WebGPU Backend 🔄
-- **Status**: Planned (Milestone 4.2)
+### WebGPU Backend ✅
+- **Status**: Complete (Milestone 4.2)
 - **Platforms**: Windows, Linux, macOS, Web (via Emscripten)
-- **Key Challenges**: WGSL shader translation, web platform constraints
+- **Documentation**: [webgpu.md](webgpu.md)
+- **Key Features**:
+  - Google's Dawn C++ implementation
+  - SPIR-V to WGSL shader transpilation (SPIRV-Cross)
+  - Bind group resource binding
+  - Push constants emulated via small uniform buffer
+  - Cubemap texture upload with per-face-per-mip writes
+  - Platform surface bridges (Metal layer on macOS)
 
 ### Direct3D 12 Backend 🔄
 - **Status**: Planned (Milestone 8.1 - Phase 8)
@@ -204,4 +212,4 @@ Having multiple backend implementations provides:
 - [Modern Graphics APIs](modern_graphics_apis.md) - Underlying concepts
 - [Vulkan Implementation](vulkan.md) - Vulkan-specific details
 - [Metal Implementation](metal.md) - Metal-specific details
-```
+- [WebGPU Implementation](webgpu.md) - WebGPU-specific details

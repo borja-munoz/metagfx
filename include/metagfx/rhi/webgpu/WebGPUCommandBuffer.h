@@ -62,6 +62,9 @@ private:
     uint64 m_IndexBufferOffset = 0;
     wgpu::IndexFormat m_IndexFormat = wgpu::IndexFormat::Uint32;
 
+    // Track if we have a valid bind group bound
+    bool m_HasValidBindGroup = false;
+
     // Push constants staging buffer (WebGPU doesn't have native push constants)
     static constexpr uint32 MAX_PUSH_CONSTANT_SIZE = 128;
     uint8 m_PushConstantBuffer[MAX_PUSH_CONSTANT_SIZE] = {};

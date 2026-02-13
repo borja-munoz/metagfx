@@ -32,14 +32,17 @@ wgpu::Surface CreateWebGPUSurfaceFromWindow(SDL_Window* window, wgpu::Instance i
         return nullptr;
     }
 
-    // Create WebGPU surface descriptor for Metal
-    wgpu::SurfaceDescriptorFromMetalLayer metalDesc{};
-    metalDesc.layer = metalLayer;
+    // Create WebGPU surface descriptor for Metal (modern Dawn API)
+    WGPUSurfaceSourceMetalLayer metalSrc{};
+    metalSrc.chain.sType = WGPUSType_SurfaceSourceMetalLayer;
+    metalSrc.layer = metalLayer;
 
-    wgpu::SurfaceDescriptor surfaceDesc{};
-    surfaceDesc.nextInChain = &metalDesc;
+    WGPUSurfaceDescriptor surfaceDesc{};
+    surfaceDesc.nextInChain = &metalSrc.chain;
 
-    wgpu::Surface surface = instance.CreateSurface(&surfaceDesc);
+    WGPUInstance wgpuInstance = instance.Get();
+    WGPUSurface wgpuSurface = wgpuInstanceCreateSurface(wgpuInstance, &surfaceDesc);
+    wgpu::Surface surface = wgpu::Surface::Acquire(wgpuSurface);
 
     if (!surface) {
         METAGFX_ERROR << "Failed to create WebGPU surface from CAMetalLayer";

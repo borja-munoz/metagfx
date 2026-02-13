@@ -134,6 +134,54 @@ void VulkanSwapChain::Present() {
 
 The fence wait at the start of frame N ensures that frame N-2 has completed GPU processing, making it safe to reuse frame N's resources (since they were last used 2 frames ago).
 
+## Per-Frame Uniform Buffer Double-Buffering
+
+A related but distinct problem arises with **uniform buffers that are written by the CPU every frame** and bound to per-frame descriptor sets.
+
+### The Problem
+
+With `MAX_FRAMES_IN_FLIGHT = 2`, the CPU prepares frame N+1 while the GPU renders frame N. If a single `VulkanBuffer` is shared between `m_DescriptorSet[0]` and `m_DescriptorSet[1]`, then:
+
+```
+GPU renders frame N:    reads DescriptorSet[0] → reads shared buffer
+CPU prepares frame N+1: writes shared buffer  ← RACE CONDITION!
+```
+
+The CPU may overwrite data the GPU is still reading. This manifests as:
+- **Intermittent flickering** correlated with parameter changes
+- **Camera-movement-dependent flicker**: flickering increases when the camera moves because `cameraPosition` changes every frame
+- **Model-dependent flicker**: models with complex material flags (e.g., many textures enabled) flicker while simple models (e.g., `materialFlags = 0`) do not — because a constant value written into the same memory looks like a no-op even during a race
+
+### The Solution: Per-Frame Buffers
+
+Double-buffer any uniform buffer that is written every frame:
+
+```cpp
+// Application.h
+Ref<rhi::Buffer> m_ModelPushConstantBuffer[2];  // One per frame in flight
+
+// Application.cpp - descriptor set binding (during setup)
+for (int frameIndex = 0; frameIndex < 2; ++frameIndex) {
+    m_ModelPushConstantBuffer[frameIndex] = m_Device->CreateBuffer(desc);
+    m_DescriptorSet[frameIndex]->BindUniformBuffer(
+        binding, m_ModelPushConstantBuffer[frameIndex], 0, sizeof(T));
+}
+
+// Application.cpp - data upload (per frame)
+m_ModelPushConstantBuffer[m_CurrentFrame]->CopyData(&data, sizeof(T));
+```
+
+Now the GPU reads `m_ModelPushConstantBuffer[0]` for frame 0 while the CPU writes `m_ModelPushConstantBuffer[1]` for frame 1 — no conflict.
+
+### What Needs Double-Buffering?
+
+| Buffer type | Needs double-buffering? | Reason |
+|-------------|------------------------|--------|
+| Uniform buffer bound per-frame AND written every frame | **Yes** | CPU/GPU race condition |
+| Static vertex/index buffer (never changes after upload) | No | Never modified after creation |
+| Uniform buffer bound once and never updated | No | No writes = no race |
+| Staging buffer (CPU-side only) | No | GPU never accesses directly |
+
 ## Alternative Approaches (Not Used)
 
 ### 1. vkDeviceWaitIdle() - Global GPU Sync

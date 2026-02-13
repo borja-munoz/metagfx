@@ -346,6 +346,7 @@ struct PipelineDesc {
     std::vector<ColorAttachmentState> colorAttachments;
     const char* debugName = nullptr;
     VertexInputState vertexInputState;
+    Ref<class DescriptorSet> descriptorSetLayout = nullptr;  // Optional: for WebGPU explicit pipeline layout
 };
 
 struct Viewport {

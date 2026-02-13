@@ -23,12 +23,14 @@ public:
 
     // WebGPU-specific
     wgpu::Buffer GetHandle() const { return m_Buffer; }
+    uint64 GetAllocatedSize() const { return m_AllocatedSize; }  // Actual GPU buffer size (aligned)
 
 private:
     WebGPUContext& m_Context;
     wgpu::Buffer m_Buffer = nullptr;
 
-    uint64 m_Size = 0;
+    uint64 m_Size = 0;            // Requested size (for interface compatibility)
+    uint64 m_AllocatedSize = 0;   // Actual allocated size (may be larger due to alignment)
     BufferUsage m_Usage;
     MemoryUsage m_MemoryUsage;
 

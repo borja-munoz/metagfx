@@ -41,8 +41,8 @@ VkShaderStageFlags VulkanDescriptorSet::ToVulkanShaderStage(ShaderStage stage) {
 }
 
 // Constructor from backend-agnostic descriptor set description
-VulkanDescriptorSet::VulkanDescriptorSet(VulkanContext& context, const DescriptorSetDesc& desc)
-    : m_Context(context) {
+VulkanDescriptorSet::VulkanDescriptorSet(VulkanContext& context, const DescriptorSetDesc& desc, uint32 numFrames)
+    : m_Context(context), m_NumFrames(numFrames) {
 
     // Convert backend-agnostic bindings to Vulkan bindings
     for (const auto& binding : desc.bindings) {
@@ -110,7 +110,7 @@ void VulkanDescriptorSet::AllocateSets() {
     for (const auto& binding : m_Bindings) {
         VkDescriptorPoolSize poolSize{};
         poolSize.type = binding.type;
-        poolSize.descriptorCount = MAX_FRAMES;
+        poolSize.descriptorCount = m_NumFrames;
         poolSizes.push_back(poolSize);
     }
     
@@ -118,25 +118,25 @@ void VulkanDescriptorSet::AllocateSets() {
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     poolInfo.poolSizeCount = static_cast<uint32>(poolSizes.size());
     poolInfo.pPoolSizes = poolSizes.data();
-    poolInfo.maxSets = MAX_FRAMES;
+    poolInfo.maxSets = m_NumFrames;
     
     VK_CHECK(vkCreateDescriptorPool(m_Context.device, &poolInfo, nullptr, &m_Pool));
     
     // Allocate descriptor sets
-    std::vector<VkDescriptorSetLayout> layouts(MAX_FRAMES, m_Layout);
+    std::vector<VkDescriptorSetLayout> layouts(m_NumFrames, m_Layout);
     
     VkDescriptorSetAllocateInfo allocInfo{};
     allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
     allocInfo.descriptorPool = m_Pool;
-    allocInfo.descriptorSetCount = MAX_FRAMES;
+    allocInfo.descriptorSetCount = m_NumFrames;
     allocInfo.pSetLayouts = layouts.data();
     
-    m_DescriptorSets.resize(MAX_FRAMES);
+    m_DescriptorSets.resize(m_NumFrames);
     VK_CHECK(vkAllocateDescriptorSets(m_Context.device, &allocInfo, m_DescriptorSets.data()));
 }
 
 void VulkanDescriptorSet::UpdateSets(const std::vector<DescriptorBinding>& bindings) {
-    for (uint32 i = 0; i < MAX_FRAMES; i++) {
+    for (uint32 i = 0; i < m_NumFrames; i++) {
         std::vector<VkWriteDescriptorSet> descriptorWrites;
         std::vector<VkDescriptorBufferInfo> bufferInfos;
         std::vector<VkDescriptorImageInfo> imageInfos;
@@ -219,6 +219,12 @@ void VulkanDescriptorSet::UpdateTexture(uint32 binding, Ref<Texture> texture, Re
         }
     }
     UpdateSets(m_Bindings);
+}
+
+void VulkanDescriptorSet::Update() {
+    // Vulkan updates descriptor sets immediately in UpdateBuffer/UpdateTexture
+    // This is a no-op for Vulkan but required by the DescriptorSet interface
+    // for backends like WebGPU that need explicit bind group rebuilding
 }
 
 void* VulkanDescriptorSet::GetNativeHandle(uint32 frameIndex) const {

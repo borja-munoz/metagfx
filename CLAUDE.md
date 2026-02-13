@@ -6,15 +6,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 MetaGFX is a backend-agnostic physically-based renderer implementing a common abstract core with multiple graphics API backends (Vulkan, Direct3D 12, Metal, WebGPU). The project is organized around a phased roadmap with milestones tracked in `claude/metagfx_roadmap.md`.
 
-**Current Status**: Milestone 4.1 completed (Metal Backend Implementation). The renderer supports:
-- **Multi-Backend Rendering**: Vulkan (Windows, Linux, macOS) and Metal (macOS)
+**Current Status**: Milestone 4.2 completed (WebGPU Backend Implementation). The renderer supports:
+- **Multi-Backend Rendering**: Vulkan (Windows, Linux, macOS), Metal (macOS), and WebGPU (Windows, macOS, Linux, Web)
 - Physically-Based Rendering (PBR) with Cook-Torrance BRDF
 - Real-time shadow mapping with PCF filtering from directional lights
 - Model loading from various formats (OBJ, FBX, glTF, COLLADA)
 - Full material system (albedo, roughness, metallic, emissive, normal maps)
-- Image-Based Lighting (IBL) with environment maps
-- Skybox rendering with LOD control
-- Interactive UI controls (ImGui on both Vulkan and Metal)
+- Image-Based Lighting (IBL) with environment maps and cubemap skybox
+- Skybox rendering with LOD control (all 6 cubemap faces)
+- Interactive UI controls (ImGui on Vulkan, Metal, and WebGPU backends)
 
 ## Build Commands
 
@@ -56,8 +56,8 @@ metagfx.exe  # Windows
 ```bash
 cmake .. -DMETAGFX_USE_VULKAN=ON      # Enable Vulkan (default: ON) ✅ Fully supported
 cmake .. -DMETAGFX_USE_METAL=ON       # Enable Metal (default: OFF) ✅ Fully supported
+cmake .. -DMETAGFX_USE_WEBGPU=ON      # Enable WebGPU (default: OFF) ✅ Fully supported
 cmake .. -DMETAGFX_USE_D3D12=ON       # Enable D3D12 (default: OFF) - Planned
-cmake .. -DMETAGFX_USE_WEBGPU=ON      # Enable WebGPU (default: OFF) - Planned
 cmake .. -DMETAGFX_BUILD_TESTS=ON     # Build tests (default: OFF)
 ```
 
@@ -138,6 +138,12 @@ The RHI is the core abstraction that enables multi-backend support. Key principl
   - Platforms: macOS (iOS-ready)
   - SPIR-V to MSL shader transpilation via SPIRV-Cross
   - See [docs/metal.md](docs/metal.md) for details
+- **WebGPU** (`src/rhi/webgpu/`, `include/metagfx/rhi/webgpu/`) ✅ Complete
+  - Google's Dawn C++ implementation: `WebGPUDevice`, `WebGPUSwapChain`, `WebGPUBuffer`, etc.
+  - Platforms: Windows, macOS, Linux, Web (Emscripten)
+  - SPIR-V to WGSL shader transpilation via SPIRV-Cross
+  - Push constants emulated via small uniform buffer
+  - See [docs/webgpu.md](docs/webgpu.md) for details
 - Backend selection happens via factory function: `CreateGraphicsDevice(GraphicsAPI api, ...)`
 
 ### External Dependencies
@@ -193,7 +199,10 @@ The codebase uses type aliases for smart pointers:
 3. Confirm the implementation approach before proceeding with implementation
 4. Implement the feature by adding/editing source files
 5. Update the corresponding CMakeLists.txt to include new source files
-6. When complete, document in `docs`, either updating existing docs or adding new ones if needed
+6. Verify the code compiles
+7. Run the executable to validate the code runs without crashing using all the backends
+8. Do not consider the code complete until the user validates the rendering
+9. When complete, document in `docs`, either updating existing docs or adding new ones if needed
 
 ### Working with Shaders
 
@@ -319,8 +328,9 @@ Key documentation files:
 - `docs/light_system.md` - Light system design and implementation
 - `docs/pbr_rendering.md` - PBR rendering with Cook-Torrance BRDF
 - `docs/shadow_mapping.md` - Shadow mapping with PCF, Vulkan depth convention, ground plane shadows
-- `docs/resource_management.md` - GPU resource lifetimes and deferred deletion
+- `docs/resource_management.md` - GPU resource lifetimes, deferred deletion, and per-frame buffer double-buffering
 - `docs/imgui_integration.md` - ImGui GUI system integration and usage
+- `docs/webgpu.md` - WebGPU backend implementation (Dawn, SPIRV-Cross WGSL, bind groups)
 - `claude/metagfx_roadmap.md` - Full implementation roadmap (10 phases, 30+ milestones)
 - `claude/milestone_x_y/` - Per-milestone implementation notes
 
@@ -338,7 +348,7 @@ Key documentation files:
 
 ## Backend Implementation Pattern
 
-The Metal backend (Milestone 4.1) validates the RHI's multi-API design. When adding future backends (D3D12, WebGPU):
+The Metal (Milestone 4.1) and WebGPU (Milestone 4.2) backends validate the RHI's multi-API design. When adding future backends (D3D12):
 
 1. Create backend directory: `src/rhi/<api>/` and `include/metagfx/rhi/<api>/`
 2. Implement all RHI abstract interfaces for the new backend
@@ -347,5 +357,9 @@ The Metal backend (Milestone 4.1) validates the RHI's multi-API design. When add
 5. Handle shader compilation (SPIR-V → target shading language)
 6. Test that the renderer core works without modification
 7. Document backend-specific details in `docs/<api>.md`
+
+**Key Insight**: Vulkan, Metal, and WebGPU backends share 100% of application-level code. The RHI successfully abstracts fundamental API differences across three very different APIs.
+
+**Per-frame buffer rule**: Any uniform buffer that contains mutable per-frame data and is bound to a per-frame descriptor set must be double-buffered (one copy per frame in flight). See `docs/vulkan.md` and `docs/resource_management.md` for details.
 
 **Key Insight**: Both Vulkan and Metal backends share 100% of application-level code. The RHI successfully abstracts fundamental API differences, proving the design works.
