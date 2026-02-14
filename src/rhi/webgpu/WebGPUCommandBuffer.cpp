@@ -198,14 +198,14 @@ void WebGPUCommandBuffer::SetScissor(const Rect2D& scissor) {
     );
 }
 
-void WebGPUCommandBuffer::BindVertexBuffer(Ref<Buffer> buffer, uint64 offset) {
+void WebGPUCommandBuffer::BindVertexBuffer(Ref<Buffer> buffer, uint32 slot, uint64 offset) {
     if (!m_RenderPassEncoder) {
         METAGFX_ERROR << "BindVertexBuffer called without active render pass";
         return;
     }
 
     auto webgpuBuffer = static_cast<WebGPUBuffer*>(buffer.get());
-    m_RenderPassEncoder.SetVertexBuffer(0, webgpuBuffer->GetHandle(), offset, buffer->GetSize() - offset);
+    m_RenderPassEncoder.SetVertexBuffer(slot, webgpuBuffer->GetHandle(), offset, buffer->GetSize() - offset);
 }
 
 void WebGPUCommandBuffer::BindIndexBuffer(Ref<Buffer> buffer, uint64 offset) {

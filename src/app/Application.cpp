@@ -27,6 +27,7 @@
 #include "metagfx/rhi/metal/MetalDevice.h"
 #include "metagfx/rhi/metal/MetalTexture.h"
 #endif
+#include "metagfx/math/Frustum.h"
 #include "metagfx/scene/Camera.h"
 #include "metagfx/scene/Material.h"
 #include "metagfx/scene/Mesh.h"
@@ -34,6 +35,7 @@
 #include "metagfx/utils/TextureUtils.h"
 #include <SDL3/SDL.h>
 #include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
 #include <imgui.h>
 #include <imgui_impl_sdl3.h>
 #ifdef METAGFX_USE_VULKAN
@@ -499,6 +501,26 @@ void Application::Init() {
     // Create ground plane for shadow visualization
     CreateGroundPlane();
 
+    // Create initial instance buffer (single identity transform for non-instanced rendering)
+    CreateInstanceBuffer();
+
+    // Create a permanent 1-element identity instance buffer.
+    // Vulkan requires ALL pipeline vertex bindings to be bound before a draw call.
+    // Non-instanced draws (ground plane) bind this to slot 1 instead of m_InstanceBuffer.
+    {
+        glm::mat4 identity(1.0f);
+        rhi::BufferDesc idDesc{};
+        idDesc.size        = sizeof(glm::mat4);
+        idDesc.usage       = rhi::BufferUsage::Vertex | rhi::BufferUsage::TransferDst;
+        idDesc.memoryUsage = rhi::MemoryUsage::CPUToGPU;
+        m_SingleInstanceBuffer = m_Device->CreateBuffer(idDesc);
+        if (m_SingleInstanceBuffer)
+            m_SingleInstanceBuffer->CopyData(&identity, sizeof(identity));
+    }
+
+    // Start frame timing
+    m_FrameStart = std::chrono::steady_clock::now();
+
     METAGFX_INFO << "Controls:";
     METAGFX_INFO << "  WASD/QE - Camera movement";
     METAGFX_INFO << "  Mouse drag - Rotate camera";
@@ -828,12 +850,28 @@ void Application::CreateModelPipeline() {
     pipelineDesc.vertexShader = vertShader;
     pipelineDesc.fragmentShader = fragShader;
 
-    // Vertex input: position (vec3), normal (vec3), texcoord (vec2)
-    pipelineDesc.vertexInput.stride = sizeof(Vertex);
+    // Vertex input: position (vec3), normal (vec3), texcoord (vec2) + per-instance mat4
+    pipelineDesc.vertexInput.stride = sizeof(Vertex);  // Legacy fallback for single-binding backends
     pipelineDesc.vertexInput.attributes = {
-        { 0, rhi::Format::R32G32B32_SFLOAT, 0, 0 },                          // position at location 0, binding 0
-        { 1, rhi::Format::R32G32B32_SFLOAT, sizeof(float) * 3, 0 },          // normal at location 1, binding 0
-        { 2, rhi::Format::R32G32_SFLOAT, sizeof(float) * 6, 0 }              // texcoord at location 2, binding 0
+        { 0, rhi::Format::R32G32B32_SFLOAT, 0, 0 },
+        { 1, rhi::Format::R32G32B32_SFLOAT, sizeof(float) * 3, 0 },
+        { 2, rhi::Format::R32G32_SFLOAT,    sizeof(float) * 6, 0 }
+    };
+    // Multi-binding vertex input: binding 0 = per-vertex, binding 1 = per-instance mat4
+    pipelineDesc.vertexInputState.bindings = {
+        { 0, sizeof(Vertex),         rhi::VertexInputRate::Vertex   },
+        { 1, sizeof(glm::mat4),      rhi::VertexInputRate::Instance },
+    };
+    pipelineDesc.vertexInputState.attributes = {
+        // Per-vertex (binding 0)
+        { 0, rhi::Format::R32G32B32_SFLOAT,    0,                  0 },
+        { 1, rhi::Format::R32G32B32_SFLOAT,    sizeof(float) * 3,  0 },
+        { 2, rhi::Format::R32G32_SFLOAT,       sizeof(float) * 6,  0 },
+        // Per-instance mat4 rows (binding 1)
+        { 3, rhi::Format::R32G32B32A32_SFLOAT, sizeof(float) * 0,  1 },
+        { 4, rhi::Format::R32G32B32A32_SFLOAT, sizeof(float) * 4,  1 },
+        { 5, rhi::Format::R32G32B32A32_SFLOAT, sizeof(float) * 8,  1 },
+        { 6, rhi::Format::R32G32B32A32_SFLOAT, sizeof(float) * 12, 1 },
     };
 
     pipelineDesc.topology = rhi::PrimitiveTopology::TriangleList;
@@ -951,10 +989,22 @@ void Application::CreateShadowPipeline() {
     pipelineDesc.vertexShader = vertShader;
     pipelineDesc.fragmentShader = fragShader;
 
-    // Vertex input: position (vec3) only
-    pipelineDesc.vertexInput.stride = sizeof(Vertex);
+    // Vertex input: position (vec3) only per-vertex + per-instance mat4
+    pipelineDesc.vertexInput.stride = sizeof(Vertex);  // Legacy fallback
     pipelineDesc.vertexInput.attributes = {
         { 0, Format::R32G32B32_SFLOAT, 0, 0 }  // position at location 0, binding 0
+    };
+    // Multi-binding vertex input: binding 0 = per-vertex position, binding 1 = per-instance mat4
+    pipelineDesc.vertexInputState.bindings = {
+        { 0, sizeof(Vertex),     rhi::VertexInputRate::Vertex   },
+        { 1, sizeof(glm::mat4),  rhi::VertexInputRate::Instance },
+    };
+    pipelineDesc.vertexInputState.attributes = {
+        { 0, rhi::Format::R32G32B32_SFLOAT,    0,                  0 },  // position
+        { 3, rhi::Format::R32G32B32A32_SFLOAT, sizeof(float) * 0,  1 },  // instanceRow0
+        { 4, rhi::Format::R32G32B32A32_SFLOAT, sizeof(float) * 4,  1 },  // instanceRow1
+        { 5, rhi::Format::R32G32B32A32_SFLOAT, sizeof(float) * 8,  1 },  // instanceRow2
+        { 6, rhi::Format::R32G32B32A32_SFLOAT, sizeof(float) * 12, 1 },  // instanceRow3
     };
 
     pipelineDesc.topology = PrimitiveTopology::TriangleList;
@@ -1030,6 +1080,42 @@ void Application::CreateSkyboxCube() {
     METAGFX_INFO << "Skybox cube created (8 vertices, 36 indices)";
 }
 
+void Application::CreateInstanceBuffer() {
+    using namespace rhi;
+
+    int N = m_EnableInstancing ? m_InstanceGridSize : 1;
+    std::vector<glm::mat4> transforms;
+    transforms.reserve(N * N);
+
+    if (m_EnableInstancing && N > 1) {
+        for (int x = 0; x < N; ++x) {
+            for (int z = 0; z < N; ++z) {
+                float px = (x - N / 2) * m_InstanceSpacing;
+                float pz = (z - N / 2) * m_InstanceSpacing;
+                transforms.push_back(glm::translate(glm::mat4(1.0f), glm::vec3(px, 0.0f, pz)));
+            }
+        }
+    } else {
+        transforms.push_back(glm::mat4(1.0f));  // Single identity transform
+    }
+
+    // Store CPU-side so per-frame frustum culling can filter them
+    m_InstanceTransforms = transforms;
+
+    // Size the GPU buffer for the maximum number of instances so per-frame uploads
+    // of a culled subset never need to reallocate
+    BufferDesc desc{};
+    desc.size        = static_cast<uint32>(transforms.size() * sizeof(glm::mat4));
+    desc.usage       = BufferUsage::Vertex | BufferUsage::TransferDst;
+    desc.memoryUsage = MemoryUsage::CPUToGPU;
+
+    m_InstanceBuffer = m_Device->CreateBuffer(desc);
+    if (m_InstanceBuffer) {
+        m_InstanceBuffer->CopyData(transforms.data(), desc.size);
+        METAGFX_INFO << "Instance buffer created: " << transforms.size() << " transforms";
+    }
+}
+
 void Application::Run() {
     METAGFX_INFO << "Starting main loop...";
     
@@ -1041,9 +1127,30 @@ void Application::Run() {
         float deltaTime = (currentTime - lastTime) / 1000000000.0f;
         lastTime = currentTime;
         
+        m_FrameStart = std::chrono::steady_clock::now();
+        // Reset per-frame counters but preserve frameTimeMs from the previous frame:
+        // RenderImGui() is called inside Render() — before the end-of-frame timestamp
+        // is taken — so frameTimeMs would always read 0 if we zeroed it here.
+        m_Metrics.drawCalls    = 0;
+        m_Metrics.triangles    = 0;
+        m_Metrics.culledMeshes = 0;
+
         ProcessEvents();
         Update(deltaTime);
         Render();
+
+        auto frameEnd = std::chrono::steady_clock::now();
+        m_Metrics.frameTimeMs = std::chrono::duration<float, std::milli>(frameEnd - m_FrameStart).count();
+
+        // Refresh display values every 500 ms to avoid flickering
+        m_DisplayAccumMs += m_Metrics.frameTimeMs;
+        m_DisplayFrameCount++;
+        if (m_DisplayAccumMs >= 500.0f) {
+            m_DisplayFrameTimeMs = m_DisplayAccumMs / m_DisplayFrameCount;
+            m_DisplayFps         = 1000.0f / m_DisplayFrameTimeMs;
+            m_DisplayAccumMs     = 0.0f;
+            m_DisplayFrameCount  = 0;
+        }
     }
 
     METAGFX_INFO << "Main loop ended";
@@ -1190,6 +1297,13 @@ void Application::Render() {
     using namespace rhi;
 
     if (!m_Device) return;
+
+    // Recreate instance buffer if dirty (deferred from ImGui to avoid destroying a
+    // buffer that the previous frame's command buffer is still referencing)
+    if (m_InstanceBufferDirty) {
+        m_InstanceBufferDirty = false;
+        CreateInstanceBuffer();
+    }
 
     // Process pending model load (deferred from ImGui UI)
     if (m_HasPendingModel) {
@@ -1380,23 +1494,32 @@ void Application::Render() {
             // Bind shadow descriptor set
             cmd->BindDescriptorSet(m_ShadowPipeline, m_ShadowDescriptorSet, 0);
 
-            // Render all meshes from light's perspective
+            // Render all meshes from light's perspective (with instancing)
             uint32 meshesRendered = 0;
-            for (const auto& mesh : m_Model->GetMeshes()) {
-                if (mesh && mesh->IsValid()) {
-                    // Draw mesh (model matrix is in the uniform buffer)
-                    cmd->BindVertexBuffer(mesh->GetVertexBuffer());
-                    cmd->BindIndexBuffer(mesh->GetIndexBuffer());
-                    cmd->DrawIndexed(mesh->GetIndexCount());
-                    meshesRendered++;
+            const int instanceCount = m_EnableInstancing
+                ? (m_InstanceGridSize * m_InstanceGridSize)
+                : 1;
 
-                    // Debug: Log draw call details
-                    static bool loggedDrawCall = false;
-                    if (!loggedDrawCall) {
-                        METAGFX_INFO << "Shadow pass draw call: " << mesh->GetIndexCount()
-                                     << " indices, vertex buffer valid: " << (mesh->GetVertexBuffer() ? "yes" : "no")
-                                     << ", index buffer valid: " << (mesh->GetIndexBuffer() ? "yes" : "no");
-                        loggedDrawCall = true;
+            // Build light-space frustum for culling
+            Frustum lightFrustum = Frustum::FromViewProjection(shadowUBO.lightSpaceMatrix);
+
+            // Cull model against light frustum
+            bool modelVisible = true;
+            if (m_EnableFrustumCulling) {
+                modelVisible = lightFrustum.IntersectsSphere(
+                    m_Model->GetCenter(), m_Model->GetBoundingSphereRadius() * 1.2f);
+            }
+
+            if (modelVisible) {
+                for (const auto& mesh : m_Model->GetMeshes()) {
+                    if (mesh && mesh->IsValid()) {
+                        // Shadow pass always uses LOD0 (full geometry)
+                        cmd->BindVertexBuffer(mesh->GetVertexBuffer(), 0);
+                        cmd->BindVertexBuffer(m_InstanceBuffer, 1);
+                        cmd->BindIndexBuffer(mesh->GetIndexBuffer(0));
+                        cmd->DrawIndexed(mesh->GetIndexCount(0), instanceCount);
+                        m_Metrics.drawCalls++;
+                        meshesRendered++;
                     }
                 }
             }
@@ -1534,8 +1657,54 @@ void Application::Render() {
         cmd->PushConstants(m_ModelPipeline, ShaderStage::Fragment,
                            0, sizeof(glm::vec4), &cameraPos);
 
+        // Frustum culling + instance count resolution
+        //
+        // • Instancing ON  → per-instance sphere test; upload only visible transforms.
+        //                    culledMeshes counts instances that were removed.
+        // • Instancing OFF → single model-level sphere test.
+        bool modelVisible = true;
+        int  instanceCount = 1;
+
+        if (m_EnableInstancing && !m_InstanceTransforms.empty()) {
+            if (m_EnableFrustumCulling) {
+                Frustum cameraFrustum = m_Camera->GetFrustum();
+                float   sphereRadius  = m_Model->GetBoundingSphereRadius() * 1.2f;
+                glm::vec3 modelCenter = m_Model->GetCenter();
+
+                std::vector<glm::mat4> visibleTransforms;
+                visibleTransforms.reserve(m_InstanceTransforms.size());
+                for (const auto& t : m_InstanceTransforms) {
+                    glm::vec3 iCenter = glm::vec3(t * glm::vec4(modelCenter, 1.0f));
+                    if (cameraFrustum.IntersectsSphere(iCenter, sphereRadius))
+                        visibleTransforms.push_back(t);
+                }
+
+                m_Metrics.culledMeshes += static_cast<uint32>(
+                    m_InstanceTransforms.size() - visibleTransforms.size());
+                instanceCount = static_cast<int>(visibleTransforms.size());
+
+                if (instanceCount > 0)
+                    m_InstanceBuffer->CopyData(visibleTransforms.data(),
+                                               instanceCount * sizeof(glm::mat4));
+                else
+                    modelVisible = false;
+            } else {
+                instanceCount = static_cast<int>(m_InstanceTransforms.size());
+            }
+        } else {
+            // Non-instanced: model-level sphere test
+            if (m_EnableFrustumCulling) {
+                Frustum cameraFrustum = m_Camera->GetFrustum();
+                modelVisible = cameraFrustum.IntersectsSphere(
+                    m_Model->GetCenter(), m_Model->GetBoundingSphereRadius() * 1.2f);
+                if (!modelVisible)
+                    m_Metrics.culledMeshes += static_cast<uint32>(m_Model->GetMeshCount());
+            }
+        }
+
         // Draw all meshes in the model
         for (const auto& mesh : m_Model->GetMeshes()) {
+            if (!modelVisible) break;
             if (mesh && mesh->IsValid() && mesh->GetMaterial()) {
                 Material* material = mesh->GetMaterial();
 
@@ -1627,10 +1796,21 @@ void Application::Render() {
                 cmd->BindDescriptorSet(m_ModelPipeline, m_DescriptorSet[m_CurrentFrame], 0);
                 #endif
 
-                // Bind and draw
-                cmd->BindVertexBuffer(mesh->GetVertexBuffer());
-                cmd->BindIndexBuffer(mesh->GetIndexBuffer());
-                cmd->DrawIndexed(mesh->GetIndexCount());
+                // LOD selection based on camera distance
+                int lod = 0;
+                if (m_EnableLOD) {
+                    float dist = glm::length(m_Camera->GetPosition() - m_Model->GetCenter());
+                    if (dist > m_LOD2Distance) lod = 2;
+                    else if (dist > m_LOD1Distance) lod = 1;
+                }
+
+                cmd->BindVertexBuffer(mesh->GetVertexBuffer(), 0);
+                cmd->BindVertexBuffer(m_InstanceBuffer, 1);
+                cmd->BindIndexBuffer(mesh->GetIndexBuffer(lod));
+                cmd->DrawIndexed(mesh->GetIndexCount(lod), instanceCount);
+
+                m_Metrics.drawCalls++;
+                m_Metrics.triangles += mesh->GetIndexCount(lod) / 3 * instanceCount;
             }
         }
     }
@@ -1657,13 +1837,15 @@ void Application::Render() {
         uint32_t flags = 0;
         cmd->PushConstants(m_ModelPipeline, ShaderStage::Fragment, 16, sizeof(uint32_t), &flags);
 
-        // Draw ground plane
+        // Draw ground plane (non-instanced: bind identity matrix to slot 1 so Vulkan is satisfied)
         if (enableWebGPUDrawing) {
             for (const auto& mesh : m_GroundPlane->GetMeshes()) {
                 if (mesh && mesh->IsValid()) {
-                    cmd->BindVertexBuffer(mesh->GetVertexBuffer());
+                    cmd->BindVertexBuffer(mesh->GetVertexBuffer(), 0);
+                    cmd->BindVertexBuffer(m_SingleInstanceBuffer, 1);
                     cmd->BindIndexBuffer(mesh->GetIndexBuffer());
-                    cmd->DrawIndexed(mesh->GetIndexCount());
+                    cmd->DrawIndexed(mesh->GetIndexCount(), 1);
+                    m_Metrics.drawCalls++;
                 }
             }
         }
@@ -1700,6 +1882,7 @@ void Application::Render() {
         cmd->BindVertexBuffer(m_SkyboxVertexBuffer);
         cmd->BindIndexBuffer(m_SkyboxIndexBuffer);
         cmd->DrawIndexed(36);  // 36 indices for the cube
+        m_Metrics.drawCalls++;
     }
 
     // ImGui rendering order depends on backend:
@@ -1774,6 +1957,8 @@ void Application::Shutdown() {
     m_ModelPushConstantBuffer[0].reset();
     m_ModelPushConstantBuffer[1].reset();
     m_SkyboxPushConstantBuffer.reset();
+    m_InstanceBuffer.reset();
+    m_SingleInstanceBuffer.reset();
 
     // Clean up descriptor sets
     m_DescriptorSet[0].reset();
@@ -2079,8 +2264,56 @@ void Application::RenderImGui(Ref<rhi::CommandBuffer> cmd, Ref<rhi::Texture> bac
 
     // Define UI
     // METAGFX_INFO << "RenderImGui: Creating UI";
-    ImGui::SetNextWindowSize(ImVec2(350, 600), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(360, 700), ImGuiCond_FirstUseEver);
     ImGui::Begin("MetaGFX Controls");
+
+    // ── Performance Metrics ──────────────────────────────────────────────────
+    if (ImGui::CollapsingHeader("Performance", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::Text("Frame Time:   %.2f ms  (%.0f FPS)", m_DisplayFrameTimeMs, m_DisplayFps);
+        ImGui::Text("Draw Calls:   %u", m_Metrics.drawCalls);
+        ImGui::Text("Triangles:    %s", [&]() -> std::string {
+            char buf[32];
+            uint32 t = m_Metrics.triangles;
+            if (t >= 1000000) snprintf(buf, sizeof(buf), "%.2f M", t / 1000000.0f);
+            else if (t >= 1000) snprintf(buf, sizeof(buf), "%.1f K", t / 1000.0f);
+            else snprintf(buf, sizeof(buf), "%u", t);
+            return buf;
+        }().c_str());
+        ImGui::Text("Culled:       %u meshes", m_Metrics.culledMeshes);
+    }
+    ImGui::Spacing();
+
+    // ── Rendering Optimizations ──────────────────────────────────────────────
+    if (ImGui::CollapsingHeader("Optimizations", ImGuiTreeNodeFlags_DefaultOpen)) {
+        // Frustum culling
+        ImGui::Checkbox("Frustum Culling", &m_EnableFrustumCulling);
+
+        ImGui::Spacing();
+
+        // LOD
+        ImGui::Checkbox("Enable LOD", &m_EnableLOD);
+        if (m_EnableLOD) {
+            ImGui::SliderFloat("LOD1 Distance", &m_LOD1Distance, 1.0f, 50.0f, "%.1f m");
+            ImGui::SliderFloat("LOD2 Distance", &m_LOD2Distance, m_LOD1Distance + 1.0f, 200.0f, "%.1f m");
+        }
+
+        ImGui::Spacing();
+
+        // Instancing
+        bool instancingChanged = false;
+        instancingChanged |= ImGui::Checkbox("Instancing Grid", &m_EnableInstancing);
+        if (m_EnableInstancing) {
+            instancingChanged |= ImGui::SliderInt("Grid Size", &m_InstanceGridSize, 1, 7);
+            instancingChanged |= ImGui::SliderFloat("Spacing", &m_InstanceSpacing, 1.0f, 10.0f, "%.1f m");
+        }
+        if (instancingChanged) {
+            // Do NOT call CreateInstanceBuffer() here — the current frame's commands are
+            // already recorded with the old buffer. Destroying it mid-frame causes
+            // VK_ERROR_DEVICE_LOST. Defer to the start of the next frame instead.
+            m_InstanceBufferDirty = true;
+        }
+    }
+    ImGui::Spacing();
 
     // Graphics Backend Info
     ImGui::Text("Graphics Backend");

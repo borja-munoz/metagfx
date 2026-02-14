@@ -117,14 +117,18 @@ endif()
 
 set_target_properties(imgui_backends PROPERTIES FOLDER "External")
 
-# SPIRV-Cross for shader translation (used by Metal and WebGPU)
-if(METAGFX_USE_METAL OR METAGFX_USE_WEBGPU)
+# meshoptimizer - mesh optimization and LOD simplification
+add_subdirectory(meshoptimizer EXCLUDE_FROM_ALL)
+set_target_properties(meshoptimizer PROPERTIES FOLDER "External")
+
+# SPIRV-Cross for shader translation (used by Metal only; WebGPU uses Dawn's Tint)
+if(METAGFX_USE_METAL)
     # Configure SPIRV-Cross build options
     set(SPIRV_CROSS_CLI OFF CACHE BOOL "" FORCE)
     set(SPIRV_CROSS_ENABLE_TESTS OFF CACHE BOOL "" FORCE)
-    set(SPIRV_CROSS_ENABLE_GLSL ON CACHE BOOL "" FORCE)   # Required for MSL and WGSL analysis
+    set(SPIRV_CROSS_ENABLE_GLSL ON CACHE BOOL "" FORCE)   # Required for MSL analysis
     set(SPIRV_CROSS_ENABLE_HLSL OFF CACHE BOOL "" FORCE)
-    set(SPIRV_CROSS_ENABLE_MSL ${METAGFX_USE_METAL} CACHE BOOL "" FORCE)
+    set(SPIRV_CROSS_ENABLE_MSL ON CACHE BOOL "" FORCE)
     set(SPIRV_CROSS_ENABLE_CPP OFF CACHE BOOL "" FORCE)
     set(SPIRV_CROSS_ENABLE_REFLECT OFF CACHE BOOL "" FORCE)
     set(SPIRV_CROSS_ENABLE_C_API OFF CACHE BOOL "" FORCE)
@@ -133,10 +137,7 @@ if(METAGFX_USE_METAL OR METAGFX_USE_WEBGPU)
     add_subdirectory(SPIRV-Cross)
     set_target_properties(spirv-cross-core PROPERTIES FOLDER "External/SPIRV-Cross")
     set_target_properties(spirv-cross-glsl PROPERTIES FOLDER "External/SPIRV-Cross")
-
-    if(METAGFX_USE_METAL)
-        set_target_properties(spirv-cross-msl PROPERTIES FOLDER "External/SPIRV-Cross")
-    endif()
+    set_target_properties(spirv-cross-msl PROPERTIES FOLDER "External/SPIRV-Cross")
 endif()
 
 # Google Dawn - WebGPU implementation (used by WebGPU backend)

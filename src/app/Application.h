@@ -16,6 +16,7 @@
 #ifdef METAGFX_USE_VULKAN
 #include <vulkan/vulkan.h>
 #endif
+#include <chrono>
 #include <string>
 #include <vector>
 
@@ -162,6 +163,41 @@ private:
     VkDescriptorPool m_ImGuiDescriptorPool = VK_NULL_HANDLE;
     VkRenderPass m_ImGuiRenderPass = VK_NULL_HANDLE;
     std::vector<VkFramebuffer> m_ImGuiFramebuffers;  // One per swap chain image
+
+    // ── Feature 1: Frustum culling ──────────────────────────────────────────
+    bool m_EnableFrustumCulling = true;
+
+    // ── Feature 2: LOD ──────────────────────────────────────────────────────
+    bool  m_EnableLOD      = true;
+    float m_LOD1Distance   = 5.0f;
+    float m_LOD2Distance   = 20.0f;
+
+    // ── Feature 3: Instanced rendering ─────────────────────────────────────
+    bool              m_EnableInstancing = false;
+    int               m_InstanceGridSize = 3;     // N×N grid
+    float             m_InstanceSpacing  = 2.0f;
+    Ref<rhi::Buffer>         m_InstanceBuffer;            // N×N mat4 transforms (sized for max instances)
+    Ref<rhi::Buffer>         m_SingleInstanceBuffer;      // 1 identity mat4 — always bound to slot 1 for non-instanced draws
+    bool                     m_InstanceBufferDirty = false;  // Recreate at start of next frame (not mid-frame)
+    std::vector<glm::mat4>   m_InstanceTransforms;        // CPU-side full set of instance transforms
+
+    void CreateInstanceBuffer();  // Create / recreate the instance buffer
+
+    // ── Feature 4: Performance metrics ─────────────────────────────────────
+    struct FrameMetrics {
+        uint32 drawCalls     = 0;
+        uint32 triangles     = 0;
+        uint32 culledMeshes  = 0;
+        float  frameTimeMs   = 0.0f;
+    };
+    FrameMetrics m_Metrics{};
+    std::chrono::steady_clock::time_point m_FrameStart;
+
+    // Smoothed display values — updated every 500 ms to avoid flickering
+    float  m_DisplayFrameTimeMs = 0.0f;
+    float  m_DisplayFps         = 0.0f;
+    float  m_DisplayAccumMs     = 0.0f;
+    int    m_DisplayFrameCount  = 0;
 
     // GUI parameters
     float m_Exposure = 1.0f;

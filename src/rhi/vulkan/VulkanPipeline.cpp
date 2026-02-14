@@ -30,28 +30,47 @@ VulkanPipeline::VulkanPipeline(VulkanContext& context, const PipelineDesc& desc,
     
     VkPipelineShaderStageCreateInfo shaderStages[] = { vertShaderStageInfo, fragShaderStageInfo };
     
-    // Vertex input
+    // Vertex input — use vertexInputState (multi-binding) if available, else fall back to vertexInput
+    const auto& attributes = !desc.vertexInputState.attributes.empty()
+        ? desc.vertexInputState.attributes
+        : desc.vertexInput.attributes;
+    const auto& bindings = desc.vertexInputState.bindings;
+
     std::vector<VkVertexInputAttributeDescription> attributeDescs;
-    for (const auto& attr : desc.vertexInput.attributes) {
+    for (const auto& attr : attributes) {
         VkVertexInputAttributeDescription attrDesc{};
         attrDesc.location = attr.location;
-        attrDesc.binding = 0;
-        attrDesc.format = ToVulkanFormat(attr.format);
-        attrDesc.offset = attr.offset;
+        attrDesc.binding  = attr.binding;
+        attrDesc.format   = ToVulkanFormat(attr.format);
+        attrDesc.offset   = attr.offset;
         attributeDescs.push_back(attrDesc);
     }
-    
-    VkVertexInputBindingDescription bindingDesc{};
-    bindingDesc.binding = 0;
-    bindingDesc.stride = desc.vertexInput.stride;
-    bindingDesc.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
-    
+
+    std::vector<VkVertexInputBindingDescription> bindingDescs;
+    if (!bindings.empty()) {
+        for (const auto& b : bindings) {
+            VkVertexInputBindingDescription bd{};
+            bd.binding   = b.binding;
+            bd.stride    = b.stride;
+            bd.inputRate = (b.inputRate == VertexInputRate::Instance)
+                               ? VK_VERTEX_INPUT_RATE_INSTANCE
+                               : VK_VERTEX_INPUT_RATE_VERTEX;
+            bindingDescs.push_back(bd);
+        }
+    } else {
+        VkVertexInputBindingDescription bd{};
+        bd.binding   = 0;
+        bd.stride    = desc.vertexInput.stride;
+        bd.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+        bindingDescs.push_back(bd);
+    }
+
     VkPipelineVertexInputStateCreateInfo vertexInputInfo{};
     vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-    vertexInputInfo.vertexBindingDescriptionCount = 1;
-    vertexInputInfo.pVertexBindingDescriptions = &bindingDesc;
+    vertexInputInfo.vertexBindingDescriptionCount   = static_cast<uint32>(bindingDescs.size());
+    vertexInputInfo.pVertexBindingDescriptions      = bindingDescs.data();
     vertexInputInfo.vertexAttributeDescriptionCount = static_cast<uint32>(attributeDescs.size());
-    vertexInputInfo.pVertexAttributeDescriptions = attributeDescs.data();
+    vertexInputInfo.pVertexAttributeDescriptions    = attributeDescs.data();
     
     // Input assembly
     VkPipelineInputAssemblyStateCreateInfo inputAssembly{};

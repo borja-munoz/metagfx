@@ -101,8 +101,17 @@ public:
     void AddMesh(std::unique_ptr<Mesh> mesh);
 
 private:
+    void CacheBounds();  // Recomputes and caches all bounding volumes
+
     std::vector<std::unique_ptr<Mesh>> m_Meshes;
     std::string m_FilePath;
+
+    // Cached bounding volumes (computed once after load / procedural creation)
+    glm::vec3 m_CachedBoundsMin{ 0.0f };
+    glm::vec3 m_CachedBoundsMax{ 0.0f };
+    glm::vec3 m_CachedCenter   { 0.0f };
+    float     m_CachedSphereRadius = 0.0f;
+    bool      m_BoundsValid = false;
 };
 
 } // namespace metagfx

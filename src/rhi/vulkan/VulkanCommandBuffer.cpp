@@ -219,12 +219,12 @@ void VulkanCommandBuffer::SetScissor(const Rect2D& scissor) {
     vkCmdSetScissor(m_CommandBuffer, 0, 1, &sc);
 }
 
-void VulkanCommandBuffer::BindVertexBuffer(Ref<Buffer> buffer, uint64 offset) {
+void VulkanCommandBuffer::BindVertexBuffer(Ref<Buffer> buffer, uint32 slot, uint64 offset) {
     auto vkBuffer = std::static_pointer_cast<VulkanBuffer>(buffer);
     VkBuffer buffers[] = { vkBuffer->GetHandle() };
-    VkDeviceSize offsets[] = { offset };
+    VkDeviceSize offsets[] = { static_cast<VkDeviceSize>(offset) };
 
-    vkCmdBindVertexBuffers(m_CommandBuffer, 0, 1, buffers, offsets);
+    vkCmdBindVertexBuffers(m_CommandBuffer, slot, 1, buffers, offsets);
 }
 
 void VulkanCommandBuffer::BindIndexBuffer(Ref<Buffer> buffer, uint64 offset) {

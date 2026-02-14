@@ -441,6 +441,166 @@ for (const auto& mesh : m_Model->GetMeshes()) {
 }
 ```
 
+## Level of Detail (LOD)
+
+MetaGFX generates simplified LOD index buffers at mesh load time using [meshoptimizer](https://github.com/zeux/meshoptimizer).
+
+### LOD levels
+
+| Level | Target ratio | Typical use |
+|-------|-------------|-------------|
+| LOD 0 | 100 % (original) | Close range, shadow pass |
+| LOD 1 | 50 % of indices | Mid range |
+| LOD 2 | 20 % of indices | Far range |
+
+Each LOD has its own index buffer; all LODs share the same vertex buffer.
+
+### Generation (Mesh::Initialize)
+
+```cpp
+const float lodRatios[2] = { 0.5f, 0.2f };
+for (int lod = 0; lod < 2; ++lod) {
+    size_t targetCount = std::max<size_t>(3, indices.size() * lodRatios[lod]);
+    std::vector<uint32_t> lodIndices(indices.size());
+    size_t lodCount = meshopt_simplify(
+        lodIndices.data(), indices.data(), indices.size(),
+        &vertices[0].position.x, vertices.size(), sizeof(Vertex),
+        targetCount, 0.05f);
+    meshopt_optimizeVertexCache(lodIndices.data(), lodIndices.data(), lodCount, vertices.size());
+    lodIndices.resize(lodCount);
+    // Upload lodIndices to a dedicated GPU index buffer stored in m_LODLevels[lod]
+}
+```
+
+### LOD selection
+
+Distance from the camera to the model center determines which LOD is used:
+
+```cpp
+int lod = 0;
+if (m_EnableLOD) {
+    float dist = glm::length(camera->GetPosition() - model->GetCenter());
+    if      (dist > m_LOD2Distance) lod = 2;  // default: 20 units
+    else if (dist > m_LOD1Distance) lod = 1;  // default: 5 units
+}
+cmd->BindIndexBuffer(mesh->GetIndexBuffer(lod));
+cmd->DrawIndexed(mesh->GetIndexCount(lod), instanceCount);
+```
+
+Thresholds are adjustable at runtime in the ImGui **Optimizations** panel.
+
+### Mesh API
+
+```cpp
+// LOD 0 is always available; LOD 1-2 require meshoptimizer
+Ref<rhi::Buffer> GetIndexBuffer(int lod = 0) const;
+uint32_t         GetIndexCount(int lod = 0) const;
+int              GetLODCount()              const;   // returns 3 (LOD0 + 2 reduced)
+```
+
+### Dependency
+
+meshoptimizer is included as a git submodule in `external/meshoptimizer` and linked via `target_link_libraries(metagfx_scene PUBLIC meshoptimizer)`.
+
+---
+
+## Instanced Rendering
+
+Instanced rendering draws multiple copies of the same model in a **single draw call**, significantly reducing CPU overhead when rendering many objects.
+
+### How it works
+
+The instance transform (a `mat4`) is passed as a second vertex buffer bound to **slot 1** with input rate `VertexInputRate::Instance`. The vertex shader constructs the model matrix from four `vec4` inputs at locations 3–6 rather than reading from the uniform buffer:
+
+```glsl
+// model.vert
+layout(location = 3) in vec4 instanceRow0;
+layout(location = 4) in vec4 instanceRow1;
+layout(location = 5) in vec4 instanceRow2;
+layout(location = 6) in vec4 instanceRow3;
+
+// In main():
+mat4 instanceModel = mat4(instanceRow0, instanceRow1, instanceRow2, instanceRow3);
+vec4 worldPos = instanceModel * vec4(inPosition, 1.0);
+```
+
+### Pipeline vertex input
+
+The pipeline is configured with two vertex bindings:
+
+```cpp
+pipelineDesc.vertexInputState.bindings = {
+    { 0, sizeof(Vertex),    VertexInputRate::Vertex   },  // per-vertex data
+    { 1, sizeof(glm::mat4), VertexInputRate::Instance },  // per-instance mat4
+};
+```
+
+### Instance buffer management
+
+`Application::CreateInstanceBuffer()` builds the CPU-side transform list and uploads it to `m_InstanceBuffer`. The buffer is sized for the maximum instance count (N×N) and **never reallocated mid-frame** — UI changes set `m_InstanceBufferDirty = true` and the buffer is rebuilt at the start of the next frame:
+
+```cpp
+// Safe: happens before command recording, no in-flight GPU references
+if (m_InstanceBufferDirty) {
+    m_InstanceBufferDirty = false;
+    CreateInstanceBuffer();
+}
+```
+
+A separate `m_SingleInstanceBuffer` (one identity mat4) is always bound to slot 1 for non-instanced draws (ground plane) so that Vulkan's requirement that all declared vertex bindings be bound is satisfied.
+
+### Per-instance frustum culling
+
+When both instancing and frustum culling are enabled, visible instances are filtered on the CPU each frame. Only the visible transforms are uploaded to the GPU:
+
+```cpp
+for (const auto& t : m_InstanceTransforms) {
+    glm::vec3 iCenter = glm::vec3(t * glm::vec4(modelCenter, 1.0f));
+    if (frustum.IntersectsSphere(iCenter, sphereRadius))
+        visibleTransforms.push_back(t);
+}
+m_InstanceBuffer->CopyData(visibleTransforms.data(), ...);
+cmd->DrawIndexed(indexCount, visibleTransforms.size());
+```
+
+This eliminates vertex shader invocations for off-screen instances. See [camera_transformation_system.md](camera_transformation_system.md) for details on the frustum.
+
+### Demo grid
+
+The ImGui **Optimizations** panel exposes:
+- **Instancing Grid** checkbox — enable/disable
+- **Grid Size** (1–7) — creates an N×N grid
+- **Spacing** (1–10 m) — distance between grid centres
+
+### Rendering loop
+
+```cpp
+// Bind vertex data (slot 0) and instance data (slot 1)
+cmd->BindVertexBuffer(mesh->GetVertexBuffer(), 0);
+cmd->BindVertexBuffer(m_InstanceBuffer,        1);
+cmd->BindIndexBuffer(mesh->GetIndexBuffer(lod));
+cmd->DrawIndexed(mesh->GetIndexCount(lod), instanceCount);
+```
+
+---
+
+## Bounding Volumes
+
+The `Model` class caches its bounding volumes after loading so they can be queried cheaply every frame for frustum culling and camera framing:
+
+```cpp
+glm::vec3 center = model->GetCenter();
+glm::vec3 size   = model->GetSize();
+float     radius = model->GetBoundingSphereRadius();
+
+glm::vec3 bboxMin, bboxMax;
+model->GetBoundingBox(bboxMin, bboxMax);
+```
+
+The cache is computed once in `CacheBounds()` (called after `LoadFromFile`, `CreateCube`, `CreateSphere`, and `AddMesh`) by iterating all mesh vertices.
+
+---
+
 ## Debugging Tips
 
 ### Model Loading Issues
@@ -459,7 +619,4 @@ for (const auto& mesh : m_Model->GetMeshes()) {
 
 ### Performance Profiling
 
-1. **Mesh count**: Monitor `model->GetMeshCount()`
-2. **Vertex/Index count**: Track total geometry complexity
-3. **Buffer creation**: Profile GPU buffer allocation
-4. **Loading time**: Measure Assimp import duration
+See [performance_metrics.md](performance_metrics.md) for the built-in frame-time, draw-call, triangle, and culling counters displayed in the ImGui **Performance** panel.

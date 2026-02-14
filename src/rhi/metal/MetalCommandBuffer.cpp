@@ -181,10 +181,10 @@ void MetalCommandBuffer::BindPipeline(Ref<Pipeline> pipeline) {
     }
 }
 
-void MetalCommandBuffer::BindVertexBuffer(Ref<Buffer> buffer, uint64 offset) {
+void MetalCommandBuffer::BindVertexBuffer(Ref<Buffer> buffer, uint32 slot, uint64 offset) {
     if (m_RenderEncoder) {
         auto metalBuffer = static_cast<MetalBuffer*>(buffer.get());
-        m_RenderEncoder->setVertexBuffer(metalBuffer->GetHandle(), offset, 0);
+        m_RenderEncoder->setVertexBuffer(metalBuffer->GetHandle(), offset, slot);
     }
 }
 

@@ -422,6 +422,7 @@ bool Model::LoadFromFile(rhi::GraphicsDevice* device, const std::string& filepat
     }
 
     m_FilePath = filepath;
+    CacheBounds();
     METAGFX_INFO << "Model loaded successfully: " << m_Meshes.size() << " meshes";
     return true;
 }
@@ -498,6 +499,7 @@ bool Model::CreateCube(rhi::GraphicsDevice* device, float size) {
 
     m_Meshes.push_back(std::move(mesh));
     m_FilePath = "procedural_cube";
+    CacheBounds();
     return true;
 }
 
@@ -564,64 +566,60 @@ bool Model::CreateSphere(rhi::GraphicsDevice* device, float radius, uint32_t seg
 
     m_Meshes.push_back(std::move(mesh));
     m_FilePath = "procedural_sphere";
+    CacheBounds();
     return true;
 }
 
 void Model::Cleanup() {
     m_Meshes.clear();
     m_FilePath.clear();
+    m_BoundsValid = false;
 }
 
 void Model::AddMesh(std::unique_ptr<Mesh> mesh) {
     if (mesh) {
         m_Meshes.push_back(std::move(mesh));
+        CacheBounds();  // Recompute after adding a mesh
     }
 }
 
-bool Model::GetBoundingBox(glm::vec3& outMin, glm::vec3& outMax) const {
+void Model::CacheBounds() {
     if (m_Meshes.empty()) {
-        return false;
+        m_BoundsValid = false;
+        return;
     }
-
-    // Initialize with extreme values
-    outMin = glm::vec3(std::numeric_limits<float>::max());
-    outMax = glm::vec3(std::numeric_limits<float>::lowest());
-
-    // Iterate through all meshes and all vertices
+    glm::vec3 bMin(std::numeric_limits<float>::max());
+    glm::vec3 bMax(std::numeric_limits<float>::lowest());
     for (const auto& mesh : m_Meshes) {
-        const auto& vertices = mesh->GetVertices();
-        for (const auto& vertex : vertices) {
-            outMin = glm::min(outMin, vertex.position);
-            outMax = glm::max(outMax, vertex.position);
+        for (const auto& v : mesh->GetVertices()) {
+            bMin = glm::min(bMin, v.position);
+            bMax = glm::max(bMax, v.position);
         }
     }
+    m_CachedBoundsMin    = bMin;
+    m_CachedBoundsMax    = bMax;
+    m_CachedCenter       = (bMin + bMax) * 0.5f;
+    m_CachedSphereRadius = glm::length(bMax - m_CachedCenter);
+    m_BoundsValid        = true;
+}
 
+bool Model::GetBoundingBox(glm::vec3& outMin, glm::vec3& outMax) const {
+    if (!m_BoundsValid) return false;
+    outMin = m_CachedBoundsMin;
+    outMax = m_CachedBoundsMax;
     return true;
 }
 
 glm::vec3 Model::GetCenter() const {
-    glm::vec3 min, max;
-    if (!GetBoundingBox(min, max)) {
-        return glm::vec3(0.0f);
-    }
-    return (min + max) * 0.5f;
+    return m_BoundsValid ? m_CachedCenter : glm::vec3(0.0f);
 }
 
 glm::vec3 Model::GetSize() const {
-    glm::vec3 min, max;
-    if (!GetBoundingBox(min, max)) {
-        return glm::vec3(0.0f);
-    }
-    return max - min;
+    return m_BoundsValid ? (m_CachedBoundsMax - m_CachedBoundsMin) : glm::vec3(0.0f);
 }
 
 float Model::GetBoundingSphereRadius() const {
-    glm::vec3 min, max;
-    if (!GetBoundingBox(min, max)) {
-        return 0.0f;
-    }
-    glm::vec3 center = (min + max) * 0.5f;
-    return glm::length(max - center);
+    return m_BoundsValid ? m_CachedSphereRadius : 0.0f;
 }
 
 } // namespace metagfx

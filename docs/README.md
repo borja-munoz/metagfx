@@ -81,31 +81,33 @@ Complete WebGPU backend implementation guide:
 
 ### Feature Documentation
 
-#### [Camera and Transformation System](camera_transformation_system.md)
-**Topics**: Camera implementation, MVP matrices
+#### [Camera System](camera_transformation_system.md)
+**Topics**: Camera, MVP matrices, auto-framing, frustum culling
 
-Overview of the camera system (Milestone 1.4):
-- Camera class design
-- Perspective and orthographic projection
-- FPS-style controls (WASD + QE movement, mouse look)
-- Uniform buffer integration
-- MVP matrix computation
-- Descriptor set binding
+Comprehensive camera documentation (Milestones 1.4, 4.3):
+- Perspective / orthographic projection and Y-axis flip per backend
+- Orbital camera controls (drag, zoom, pan)
+- FPS-style movement (WASD + QE, mouse look)
+- Automatic model framing (`FrameBoundingBox`) with margin control
+- Uniform buffer integration (double-buffered)
+- Frustum extraction (Gribb–Hartmann) via `Frustum::FromViewProjection()`
+- Per-model and per-instance sphere culling
 
 ---
 
 #### [Model Loading System](model_loading.md)
-**Topics**: 3D model loading with Assimp
+**Topics**: 3D model loading, LOD, instanced rendering
 
-Comprehensive design documentation for model loading (Milestone 2.1):
+Comprehensive design documentation for models and meshes (Milestones 2.1, 4.3):
 - Mesh and Model class architecture
 - Vertex structure (position, normal, texCoord)
 - Assimp integration and supported formats (OBJ, FBX, glTF, COLLADA)
 - GPU buffer management and memory strategies
 - Procedural geometry generation (cube, sphere)
-- Shader integration and rendering pipeline
+- **Level of Detail (LOD)** — meshoptimizer, 3 levels, distance-based selection
+- **Instanced Rendering** — per-instance mat4, vertex buffer slot 1, N×N grid, per-frame CPU culling
+- Bounding volume cache (AABB + sphere) for culling and framing
 - Error handling and fallback patterns
-- Future enhancements (materials, textures, lighting)
 
 ---
 
@@ -169,6 +171,18 @@ Comprehensive guide to safe resource management:
 - Alternative approaches and why they fail
 - Best practices for resource lifetime management
 - Future enhancements (generalized deletion, ring buffers)
+
+---
+
+#### [Performance Metrics](performance_metrics.md)
+**Topics**: Frame time, draw calls, triangle count, frustum culling counter
+
+Built-in real-time performance counters displayed in the ImGui panel (Milestone 4.3):
+- Frame time (ms) and FPS — 500 ms smoothed average to avoid flickering
+- Draw call counter — all passes: shadow, model, ground plane, skybox
+- Triangle counter — accounts for active LOD level and visible instance count
+- Culled meshes counter — objects/instances rejected by CPU frustum culling
+- Implementation notes on safe per-frame counter reset and buffer update ordering
 
 ---
 
@@ -259,14 +273,19 @@ Per-milestone implementation notes and artifacts:
 5. [Modern Graphics APIs](modern_graphics_apis.md) - Underlying concepts
 
 **Features**:
-1. [Camera System](camera_transformation_system.md) - Viewport and controls
-2. [Model Loading](model_loading.md) - Asset pipeline
+1. [Camera System](camera_transformation_system.md) - Viewport, controls, framing, frustum culling
+2. [Model Loading](model_loading.md) - Asset pipeline, LOD, instancing
 3. [Material System](material_system.md) - Materials and lighting
 4. [Textures and Samplers](textures_and_samplers.md) - Texture system
 5. [Light System](light_system.md) - Dynamic lighting
-6. [Resource Management](resource_management.md) - GPU resource lifetimes
-7. [ImGui Integration](imgui_integration.md) - GUI system
-8. [Roadmap](../claude/metagfx_roadmap.md) - Future features
+6. [Shadow Mapping](shadow_mapping.md) - PCF shadow maps
+7. [PBR Rendering](pbr_rendering.md) - Cook-Torrance BRDF
+8. [IBL System](ibl_system.md) - Image-Based Lighting
+9. [Skybox System](skybox_system.md) - Cubemap skybox
+10. [Performance Metrics](performance_metrics.md) - Frame time, draw calls, culling counters
+11. [Resource Management](resource_management.md) - GPU resource lifetimes
+12. [ImGui Integration](imgui_integration.md) - GUI system
+13. [Roadmap](../claude/metagfx_roadmap.md) - Future features
 
 **Development**:
 1. [CLAUDE.md](../CLAUDE.md) - Development guide
@@ -315,15 +334,19 @@ cd bin
 ```
 
 ### Project Status
-**Current Milestone**: 4.2 (WebGPU Backend Implementation) ✅ Complete
+**Current Milestone**: 4.3 (Rendering Optimizations) ✅ Complete
 **Implemented Features**:
 - ✅ **Vulkan backend** (Windows, Linux, macOS)
 - ✅ **Metal backend** (macOS, iOS-ready)
-- ✅ **WebGPU backend** (Windows, macOS, Linux, Web) - **NEW**
-- ✅ Camera system with FPS controls and orbital mode
+- ✅ **WebGPU backend** (Windows, macOS, Linux, Web)
+- ✅ Camera system with FPS controls, orbital mode, and automatic model framing
+- ✅ **Frustum culling** — per-model and per-instance CPU sphere tests - **NEW**
 - ✅ Model loading (OBJ, FBX, glTF, COLLADA)
 - ✅ Runtime model switching with deferred deletion
 - ✅ Procedural geometry (cube, sphere, ground plane)
+- ✅ **Level of Detail (LOD)** — 3 levels via meshoptimizer, distance-based selection - **NEW**
+- ✅ **Instanced rendering** — N×N grid, per-instance mat4, single draw call - **NEW**
+- ✅ **Performance metrics** — frame time, draw calls, triangles, culled count - **NEW**
 - ✅ Material system (albedo, roughness, metallic, AO, emissive)
 - ✅ PBR rendering with Cook-Torrance BRDF
 - ✅ Image-Based Lighting (IBL) with environment maps
@@ -336,7 +359,6 @@ cd bin
 - ✅ ImGui integration (Vulkan + Metal + WebGPU backends)
 
 **Next Milestones**:
-- 4.3: Rendering Optimizations (frustum culling, LOD, instancing)
 - 5.1: PBRT Scene Parser
 - 8.1: Direct3D 12 Implementation (Windows) - Postponed to Phase 8
 
@@ -376,14 +398,15 @@ cd bin
 Future documentation needs:
 - [x] Metal implementation guide ✅ Complete (Milestone 4.1)
 - [x] WebGPU implementation guide ✅ Complete (Milestone 4.2)
-- [ ] Rendering optimizations guide (Milestone 4.3)
+- [x] Frustum culling + auto-framing in camera doc ✅ Complete (Milestone 4.3)
+- [x] LOD + instancing in model loading doc ✅ Complete (Milestone 4.3)
+- [x] Performance metrics guide ✅ Complete (Milestone 4.3)
 - [ ] D3D12 implementation guide (Milestone 8.1 - postponed to Phase 8)
 - [x] Texture system design ✅ Complete (Milestone 2.3)
 - [x] Lighting system design ✅ Complete (Milestone 3.1)
 - [x] PBR rendering guide ✅ Complete (Milestone 3.2)
 - [x] Shadow mapping guide ✅ Complete (Milestone 3.3)
 - [ ] PBRT scene parser guide (Phase 5)
-- [ ] Performance profiling guide
 - [ ] Testing strategy and framework
 
 ---

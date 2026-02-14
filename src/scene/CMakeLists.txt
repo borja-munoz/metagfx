@@ -35,4 +35,5 @@ target_link_libraries(metagfx_scene
         glm
         SDL3::SDL3
         assimp
+        meshoptimizer
 )

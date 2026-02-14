@@ -25,10 +25,10 @@ The **WebGPU backend** provides cross-platform GPU rendering through Google's **
 ### Shader Pipeline
 
 ```
-GLSL 4.5 → glslangValidator → SPIR-V → SPIRV-Cross (CompilerWGSL) → WGSL → Dawn
+GLSL 4.5 → glslangValidator → SPIR-V → Tint (Dawn built-in) → WGSL → Dawn
 ```
 
-SPIRV-Cross's WGSL backend (already integrated for Metal's MSL compilation) handles SPIR-V → WGSL transpilation with no additional dependencies.
+Dawn's **Tint** compiler handles SPIR-V → WGSL transpilation via `tint::SpirvToWgsl()`. Tint is bundled with Dawn and requires no additional dependencies. SPIRV-Cross is **not** used for WebGPU — it is Metal-only (SPIR-V → MSL).
 
 ---
 
@@ -71,7 +71,7 @@ include/metagfx/rhi/webgpu/
 ├── WebGPUBuffer.h             # Vertex, index, uniform buffers
 ├── WebGPUTexture.h            # Textures and views (2D, cubemap, depth)
 ├── WebGPUSampler.h            # Sampler state
-├── WebGPUShader.h             # SPIR-V → WGSL compilation
+├── WebGPUShader.h             # SPIR-V → WGSL compilation (via Tint)
 ├── WebGPUPipeline.h           # Graphics pipeline state (render pipeline)
 ├── WebGPUCommandBuffer.h      # Command encoder wrapper
 ├── WebGPUFramebuffer.h        # Render target references
@@ -84,7 +84,7 @@ src/rhi/webgpu/
 ├── WebGPUBuffer.cpp           # Buffer allocation and upload
 ├── WebGPUTexture.cpp          # Texture creation and upload
 ├── WebGPUSampler.cpp          # Sampler creation
-├── WebGPUShader.cpp           # SPIRV-Cross WGSL compilation
+├── WebGPUShader.cpp           # Tint SPIR-V → WGSL compilation
 ├── WebGPUPipeline.cpp         # Render pipeline state objects
 ├── WebGPUCommandBuffer.cpp    # Command encoder implementation
 ├── WebGPUFramebuffer.cpp      # Framebuffer setup
@@ -143,26 +143,33 @@ This prevents the misleading `[ERROR]: WebGPU Device Lost [Destroyed]` message t
 
 ## Shader Compilation (SPIR-V → WGSL)
 
-`WebGPUShader` uses SPIRV-Cross's `CompilerWGSL` to transpile SPIR-V to WGSL at runtime:
+`WebGPUShader` uses Dawn's **Tint** library (`tint::SpirvToWgsl`) to transpile SPIR-V to WGSL at runtime:
 
 ```cpp
 // src/rhi/webgpu/WebGPUShader.cpp
-spirv_cross::CompilerWGSL compiler(spirvData);
-std::string wgslSource = compiler.compile();
+tint::Initialize();  // idempotent
 
-wgpu::ShaderModuleWGSLDescriptor wgslDesc{};
-wgslDesc.code = wgslSource.c_str();
+tint::wgsl::writer::Options wgslOptions{};
+wgslOptions.allowed_features = tint::wgsl::AllowedFeatures::Everything();
+auto wgslResult = tint::SpirvToWgsl(spirvData, wgslOptions);
 
-wgpu::ShaderModuleDescriptor moduleDesc{};
-moduleDesc.nextInChain = &wgslDesc;
-m_Module = m_Context.device.CreateShaderModule(&moduleDesc);
+m_WGSLSource = wgslResult.Get();
+
+WGPUShaderSourceWGSL wgslSource{};
+wgslSource.chain.sType = WGPUSType_ShaderSourceWGSL;
+wgslSource.code.data   = m_WGSLSource.c_str();
+wgslSource.code.length = m_WGSLSource.length();
+
+WGPUShaderModuleDescriptor moduleDesc{};
+moduleDesc.nextInChain = &wgslSource.chain;
+m_Module = wgpu::ShaderModule::Acquire(wgpuDeviceCreateShaderModule(device, &moduleDesc));
 ```
 
-WGSL source is stored in `m_WGSLSource` for debugging.
+WGSL source is stored in `m_WGSLSource` for debugging. Tint is bundled with Dawn and requires no separate dependency — contrast with Metal which uses SPIRV-Cross for SPIR-V → MSL.
 
 ### Binding Remapping
 
-When SPIRV-Cross transpiles SPIR-V to WGSL, it may remap bindings because WebGPU's Tint compiler imposes stricter rules (e.g., no gaps in binding indices within a group). The application uses per-API binding constants (`BINDING(api, slot)`) to account for these remappings in descriptor set layout construction.
+Tint imposes stricter rules than Vulkan (e.g., no gaps in binding indices within a group). The application uses per-API binding constants (`BINDING(api, slot)`) to account for these remappings in descriptor set layout construction.
 
 ---
 
@@ -433,7 +440,7 @@ RenderDoc 1.26+ supports WebGPU captures on supported platforms.
 | Aspect | Vulkan | Metal | WebGPU |
 |--------|--------|-------|--------|
 | Resource binding | Descriptor sets | Argument buffers / direct | Bind groups |
-| Shaders | SPIR-V (direct) | MSL (via SPIRV-Cross) | WGSL (via SPIRV-Cross) |
+| Shaders | SPIR-V (direct) | MSL (via SPIRV-Cross) | WGSL (via Tint)        |
 | Push constants | Native | `setBytes` | Uniform buffer emulation |
 | Memory management | Explicit (VMA) | Automatic (resource modes) | Automatic |
 | Synchronization | Fences + semaphores | Semaphores | Promises (async API) |

@@ -26,7 +26,7 @@ public:
     void SetViewport(const Viewport& viewport) override;
     void SetScissor(const Rect2D& scissor) override;
     
-    void BindVertexBuffer(Ref<Buffer> buffer, uint64 offset = 0) override;
+    void BindVertexBuffer(Ref<Buffer> buffer, uint32 slot = 0, uint64 offset = 0) override;
     void BindIndexBuffer(Ref<Buffer> buffer, uint64 offset = 0) override;
     
     void Draw(uint32 vertexCount, uint32 instanceCount = 1,

@@ -22,7 +22,7 @@ MetaGFX is a backend-agnostic physically-based renderer implementing a common ab
 ```bash
 mkdir build
 cd build
-cmake .. -DCMAKE_BUILD_TYPE=Release
+cmake .. -DCMAKE_BUILD_TYPE=Release -DMETAGFX_USE_VULKAN=ON -DMETAGFX_USE_METAL=ON -DMETAGFX_USE_WEBGPU=ON -DDAWN_DIR=/Users/Borja/dev/dawn/dawn_install
 make -j$(nproc)  # Linux
 make -j$(sysctl -n hw.ncpu)  # macOS
 ```

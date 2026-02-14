@@ -37,7 +37,8 @@ public:
     virtual void SetScissor(const Rect2D& scissor) = 0;
     
     // Vertex and index buffers
-    virtual void BindVertexBuffer(Ref<Buffer> buffer, uint64 offset = 0) = 0;
+    // slot: vertex buffer binding slot (0 = per-vertex, 1 = per-instance)
+    virtual void BindVertexBuffer(Ref<Buffer> buffer, uint32 slot = 0, uint64 offset = 0) = 0;
     virtual void BindIndexBuffer(Ref<Buffer> buffer, uint64 offset = 0) = 0;
     
     // Draw commands
