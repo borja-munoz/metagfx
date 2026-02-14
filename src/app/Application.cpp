@@ -1162,13 +1162,19 @@ void Application::ProcessEvents() {
         // Let ImGui handle events first
         ImGui_ImplSDL3_ProcessEvent(&event);
 
+        // After ImGui has processed the event, check whether it wants
+        // exclusive ownership of mouse / keyboard input.  If so, skip
+        // passing the event to the 3D-view handlers below.
+        ImGuiIO& io = ImGui::GetIO();
+
         switch (event.type) {
             case SDL_EVENT_QUIT:
                 METAGFX_INFO << "Quit event received";
                 m_Running = false;
                 break;
-                
+
             case SDL_EVENT_KEY_DOWN:
+                if (io.WantCaptureKeyboard) break;
                 if (event.key.key == SDLK_ESCAPE) {
                     METAGFX_INFO << "Escape key pressed";
                     m_Running = false;
@@ -1202,6 +1208,7 @@ void Application::ProcessEvents() {
                 break;
 
             case SDL_EVENT_MOUSE_BUTTON_DOWN:
+                if (io.WantCaptureMouse) break;
                 if (event.button.button == SDL_BUTTON_LEFT) {
                     m_MouseButtonPressed = true;
                     m_FirstMouse = true;  // Reset for new drag
@@ -1217,6 +1224,7 @@ void Application::ProcessEvents() {
                 break;
 
             case SDL_EVENT_MOUSE_MOTION:
+                if (io.WantCaptureMouse) break;
                 if (m_MouseButtonPressed) {
                     if (m_FirstMouse) {
                         m_LastX = static_cast<float>(event.motion.x);
@@ -1235,6 +1243,7 @@ void Application::ProcessEvents() {
                 break;
 
             case SDL_EVENT_MOUSE_WHEEL:
+                if (io.WantCaptureMouse) break;
                 // Use zoom instead of scroll for orbital camera
                 m_Camera->ZoomToTarget(static_cast<float>(event.wheel.y));
                 break;
