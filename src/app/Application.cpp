@@ -1557,30 +1557,6 @@ void Application::Render() {
             // Rendering it here would write its depth to the shadow map and interfere
             // with shadow calculations.
 
-            // Debug: Log model info once per model load (using frame counter to rate-limit)
-            static int lastLoggedFrame = -100;
-            static int frameCounter = 0;
-            frameCounter++;
-
-            if (frameCounter - lastLoggedFrame > 60) {  // Log every 60 frames (once per second at 60fps)
-                METAGFX_INFO << "Shadow pass rendered " << meshesRendered << " meshes";
-
-                // Log model bounding box to verify it's within shadow frustum
-                glm::vec3 minBounds, maxBounds;
-                if (m_Model->GetBoundingBox(minBounds, maxBounds)) {
-                    METAGFX_INFO << "Model bounds: min(" << minBounds.x << ", " << minBounds.y
-                                 << ", " << minBounds.z << "), max(" << maxBounds.x << ", "
-                                 << maxBounds.y << ", " << maxBounds.z << ")";
-                    glm::vec3 center = (minBounds + maxBounds) * 0.5f;
-                    glm::vec3 size = maxBounds - minBounds;
-                    METAGFX_INFO << "Model center: (" << center.x << ", " << center.y << ", "
-                                 << center.z << "), size: (" << size.x << ", " << size.y
-                                 << ", " << size.z << ")";
-                }
-
-                lastLoggedFrame = frameCounter;
-            }
-
             cmd->EndRendering();
 
             // Add pipeline barrier to ensure shadow map writes complete before sampling
