@@ -27,7 +27,7 @@ public:
     void SetOrthographic(float left, float right, float bottom, float top,
                         float nearPlane, float farPlane);
     void SetAspectRatio(float aspectRatio);
-    void SetFlipY(bool flipY) { m_FlipY = flipY; }
+    void SetFlipY(bool flipY);
     
     // Transform
     void SetPosition(const glm::vec3& position);

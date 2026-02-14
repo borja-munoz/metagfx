@@ -73,6 +73,12 @@ private:
     void ShutdownImGui();
     void RenderImGui(Ref<rhi::CommandBuffer> cmd, Ref<rhi::Texture> backBuffer);
 
+    // Backend switching helpers
+    void InitWindow(rhi::GraphicsAPI api);
+    void InitGPUResources();
+    void ShutdownGPUResources();
+    void SwitchBackend(rhi::GraphicsAPI newAPI);
+
     ApplicationConfig m_Config;
     SDL_Window* m_Window = nullptr;
     bool m_Running = false;
@@ -159,10 +165,16 @@ private:
     };
     std::vector<PendingDeletion> m_DeletionQueue;
 
-    // ImGui state
+    // ImGui state (Vulkan-specific; Metal and WebGPU use different mechanisms)
+#ifdef METAGFX_USE_VULKAN
     VkDescriptorPool m_ImGuiDescriptorPool = VK_NULL_HANDLE;
     VkRenderPass m_ImGuiRenderPass = VK_NULL_HANDLE;
     std::vector<VkFramebuffer> m_ImGuiFramebuffers;  // One per swap chain image
+#endif
+
+    // Pending backend switch (deferred to start of next frame to avoid mid-render teardown)
+    bool m_HasPendingBackendSwitch = false;
+    rhi::GraphicsAPI m_PendingBackendAPI = rhi::GraphicsAPI::Vulkan;
 
     // ── Feature 1: Frustum culling ──────────────────────────────────────────
     bool m_EnableFrustumCulling = true;

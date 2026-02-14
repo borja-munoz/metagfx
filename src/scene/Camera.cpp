@@ -57,6 +57,17 @@ void Camera::SetAspectRatio(float aspectRatio) {
     }
 }
 
+void Camera::SetFlipY(bool flipY) {
+    m_FlipY = flipY;
+    // Rebuild projection matrix to apply the new flip value
+    if (m_ProjectionType == CameraProjection::Perspective) {
+        SetPerspective(m_FOV, m_AspectRatio, m_NearPlane, m_FarPlane);
+    } else {
+        SetOrthographic(m_OrthoLeft, m_OrthoRight, m_OrthoBottom, m_OrthoTop,
+                        m_NearPlane, m_FarPlane);
+    }
+}
+
 void Camera::SetPosition(const glm::vec3& position) {
     m_Position = position;
     UpdateViewMatrix();

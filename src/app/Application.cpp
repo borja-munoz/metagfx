@@ -50,7 +50,6 @@
 #include <imgui_impl_wgpu.h>
 #include <webgpu/webgpu.h>
 #endif
-#include <fstream>
 
 namespace metagfx {
 
@@ -63,40 +62,27 @@ Application::~Application() {
     Shutdown();
 }
 
-void Application::Init() {
-    METAGFX_INFO << "Initializing application...";
-    
-    // Initialize SDL
-    if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS)) {
-        METAGFX_CRITICAL << "Failed to initialize SDL: " << SDL_GetError();
-        return;
-    }
-
-    METAGFX_INFO << "SDL initialized successfully";
-
+void Application::InitWindow(rhi::GraphicsAPI api) {
     // Create window with appropriate flags for selected graphics API
     uint32_t windowFlags = SDL_WINDOW_RESIZABLE;
 
-    // Log requested backend
     const char* apiName = "Unknown";
-    switch (m_Config.graphicsAPI) {
+    switch (api) {
         case rhi::GraphicsAPI::Vulkan: apiName = "Vulkan"; break;
         case rhi::GraphicsAPI::Direct3D12: apiName = "D3D12"; break;
         case rhi::GraphicsAPI::Metal: apiName = "Metal"; break;
         case rhi::GraphicsAPI::WebGPU: apiName = "WebGPU"; break;
     }
-    METAGFX_INFO << "Requested graphics API: " << apiName;
+    METAGFX_INFO << "Creating window for backend: " << apiName;
 
 #ifdef METAGFX_USE_VULKAN
-    if (m_Config.graphicsAPI == rhi::GraphicsAPI::Vulkan) {
+    if (api == rhi::GraphicsAPI::Vulkan) {
         windowFlags |= SDL_WINDOW_VULKAN;
-        METAGFX_INFO << "Creating window with Vulkan support";
     }
 #endif
 #ifdef METAGFX_USE_METAL
-    if (m_Config.graphicsAPI == rhi::GraphicsAPI::Metal) {
+    if (api == rhi::GraphicsAPI::Metal) {
         windowFlags |= SDL_WINDOW_METAL;
-        METAGFX_INFO << "Creating window with Metal support";
     }
 #endif
 
@@ -109,11 +95,46 @@ void Application::Init() {
 
     if (!m_Window) {
         METAGFX_CRITICAL << "Failed to create window: " << SDL_GetError();
-        SDL_Quit();
         return;
     }
 
     METAGFX_INFO << "Window created: " << m_Config.width << "x" << m_Config.height;
+}
+
+void Application::Init() {
+    METAGFX_INFO << "Initializing application...";
+
+    if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS)) {
+        METAGFX_CRITICAL << "Failed to initialize SDL: " << SDL_GetError();
+        return;
+    }
+    METAGFX_INFO << "SDL initialized successfully";
+
+    InitWindow(m_Config.graphicsAPI);
+    if (!m_Window) return;
+
+    // Initialize model list (static data — done once here, not in InitGPUResources)
+    m_AvailableModels = {
+        "/Users/Borja/dev/borja-munoz/metagfx/assets/models/AntiqueCamera.glb",
+        "/Users/Borja/dev/borja-munoz/metagfx/assets/models/bunny_tex_coords.obj",
+        "/Users/Borja/dev/borja-munoz/metagfx/assets/models/DamagedHelmet.glb",
+        "/Users/Borja/dev/borja-munoz/metagfx/assets/models/MetalRoughSpheres.glb"
+    };
+    m_CurrentModelIndex = 2;
+
+    InitGPUResources();
+    m_Running = true;
+}
+
+void Application::InitGPUResources() {
+    const char* apiName = "Unknown";
+    switch (m_Config.graphicsAPI) {
+        case rhi::GraphicsAPI::Vulkan: apiName = "Vulkan"; break;
+        case rhi::GraphicsAPI::Direct3D12: apiName = "D3D12"; break;
+        case rhi::GraphicsAPI::Metal: apiName = "Metal"; break;
+        case rhi::GraphicsAPI::WebGPU: apiName = "WebGPU"; break;
+    }
+    METAGFX_INFO << "Initializing GPU resources for backend: " << apiName;
 
     // Create graphics device with configured API
     m_Device = rhi::CreateGraphicsDevice(m_Config.graphicsAPI, m_Window);
@@ -486,17 +507,10 @@ void Application::Init() {
     // Create skybox cube geometry
     CreateSkyboxCube();
 
-    // Initialize available models list
-    m_AvailableModels = {
-        "/Users/Borja/dev/borja-munoz/metagfx/assets/models/AntiqueCamera.glb",
-        "/Users/Borja/dev/borja-munoz/metagfx/assets/models/bunny_tex_coords.obj",
-        "/Users/Borja/dev/borja-munoz/metagfx/assets/models/DamagedHelmet.glb",
-        "/Users/Borja/dev/borja-munoz/metagfx/assets/models/MetalRoughSpheres.glb"
-    };
-    m_CurrentModelIndex = 2;  
-
-    // Load initial model
-    LoadModel(m_AvailableModels[m_CurrentModelIndex]);
+    // Load model (m_AvailableModels and m_CurrentModelIndex set by caller)
+    if (!m_AvailableModels.empty()) {
+        LoadModel(m_AvailableModels[m_CurrentModelIndex]);
+    }
 
     // Create ground plane for shadow visualization
     CreateGroundPlane();
@@ -531,8 +545,6 @@ void Application::Init() {
 
     // Initialize ImGui
     InitImGui();
-
-    m_Running = true;
 }
 
 void Application::LoadModel(const std::string& path) {
@@ -1307,6 +1319,13 @@ void Application::Render() {
 
     if (!m_Device) return;
 
+    // Process pending backend switch (deferred from ImGui to avoid mid-render teardown)
+    if (m_HasPendingBackendSwitch) {
+        m_HasPendingBackendSwitch = false;
+        SwitchBackend(m_PendingBackendAPI);
+        return;  // Resources recreated; skip the rest of this frame
+    }
+
     // Recreate instance buffer if dirty (deferred from ImGui to avoid destroying a
     // buffer that the previous frame's command buffer is still referencing)
     if (m_InstanceBufferDirty) {
@@ -1928,10 +1947,18 @@ void Application::Render() {
     }
 }
 
-void Application::Shutdown() {
+void Application::ShutdownGPUResources() {
     if (m_Device) {
         m_Device->WaitIdle();
     }
+
+    // Force drain deferred deletion queue before tearing down the device
+    for (auto& pending : m_DeletionQueue) {
+        if (pending.model) {
+            pending.model->Cleanup();
+        }
+    }
+    m_DeletionQueue.clear();
 
     // Shutdown ImGui
     ShutdownImGui();
@@ -1998,9 +2025,13 @@ void Application::Shutdown() {
     // Clean up shadow map
     m_ShadowMap.reset();
 
-    // Finally destroy the device
+    // Destroy device last (after all resources that depend on it)
     m_Device.reset();
-    
+}
+
+void Application::Shutdown() {
+    ShutdownGPUResources();
+
     if (m_Window) {
         METAGFX_INFO << "Destroying window...";
         SDL_DestroyWindow(m_Window);
@@ -2009,6 +2040,45 @@ void Application::Shutdown() {
 
     METAGFX_INFO << "Shutting down SDL...";
     SDL_Quit();
+}
+
+void Application::SwitchBackend(rhi::GraphicsAPI newAPI) {
+    if (newAPI == m_Config.graphicsAPI) return;
+
+    const char* newApiName = "Unknown";
+    switch (newAPI) {
+        case rhi::GraphicsAPI::Vulkan: newApiName = "Vulkan"; break;
+        case rhi::GraphicsAPI::Direct3D12: newApiName = "D3D12"; break;
+        case rhi::GraphicsAPI::Metal: newApiName = "Metal"; break;
+        case rhi::GraphicsAPI::WebGPU: newApiName = "WebGPU"; break;
+    }
+    METAGFX_INFO << "Switching backend to " << newApiName;
+
+    // m_CurrentModelIndex and m_AvailableModels are CPU-only — preserved through the switch
+
+    // Tear down all GPU resources (WaitIdle + all resources + device)
+    ShutdownGPUResources();
+
+    // Destroy old window (required — Vulkan needs SDL_WINDOW_VULKAN, Metal needs SDL_WINDOW_METAL)
+    if (m_Window) {
+        SDL_DestroyWindow(m_Window);
+        m_Window = nullptr;
+    }
+
+    // Update config and create new window for the new backend
+    m_Config.graphicsAPI = newAPI;
+    InitWindow(newAPI);
+    if (!m_Window) {
+        METAGFX_CRITICAL << "Failed to create window for new backend — stopping";
+        m_Running = false;
+        return;
+    }
+
+    // Rebuild all GPU resources (device, buffers, textures, pipelines, ImGui, loads model)
+    // m_CurrentModelIndex is still set to the model that was active before the switch
+    InitGPUResources();
+
+    METAGFX_INFO << "Backend switch to " << newApiName << " complete";
 }
 
 void Application::InitImGui() {
@@ -2273,11 +2343,115 @@ void Application::RenderImGui(Ref<rhi::CommandBuffer> cmd, Ref<rhi::Texture> bac
 
     // Define UI
     // METAGFX_INFO << "RenderImGui: Creating UI";
-    ImGui::SetNextWindowSize(ImVec2(360, 700), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(360, 350), ImGuiCond_FirstUseEver);
     ImGui::Begin("MetaGFX Controls");
 
+    // ── Graphics Backend ─────────────────────────────────────────────────────
+    if (ImGui::CollapsingHeader("Graphics Backend", ImGuiTreeNodeFlags_DefaultOpen)) {
+        // Display current backend info
+        const auto& deviceInfo = m_Device->GetDeviceInfo();
+        const char* currentApiName = "Unknown";
+        switch (deviceInfo.api) {
+            case rhi::GraphicsAPI::Vulkan: currentApiName = "Vulkan"; break;
+            case rhi::GraphicsAPI::Direct3D12: currentApiName = "D3D12"; break;
+            case rhi::GraphicsAPI::Metal: currentApiName = "Metal"; break;
+            case rhi::GraphicsAPI::WebGPU: currentApiName = "WebGPU"; break;
+        }
+        ImGui::Text("API: %s", currentApiName);
+        ImGui::Text("Device: %s", deviceInfo.deviceName.c_str());
+
+        // Backend selection combo — switches live without restart
+        // Keep selectedBackend in sync with current API (handles external changes)
+        int selectedBackend = static_cast<int>(m_Config.graphicsAPI);
+        const char* backendNames[] = { "Vulkan", "D3D12", "Metal", "WebGPU" };
+
+        // Determine which backends are available
+        bool vulkanAvailable = false;
+        bool metalAvailable = false;
+        bool webgpuAvailable = false;
+#ifdef METAGFX_USE_VULKAN
+        vulkanAvailable = true;
+#endif
+#ifdef METAGFX_USE_METAL
+        metalAvailable = true;
+#endif
+#ifdef METAGFX_USE_WEBGPU
+        webgpuAvailable = true;
+#endif
+
+        ImGui::Spacing();
+        ImGui::Text("Change Backend:");
+
+        // Show combo with only available backends
+        int previousBackend = selectedBackend;
+        if (ImGui::BeginCombo("##backend", backendNames[selectedBackend])) {
+            if (vulkanAvailable) {
+                bool isSelected = (selectedBackend == 0);
+                if (ImGui::Selectable("Vulkan", isSelected)) {
+                    selectedBackend = 0;
+                }
+                if (isSelected) ImGui::SetItemDefaultFocus();
+            }
+            // D3D12 - index 1 (Windows only, not implemented yet)
+            if (metalAvailable) {
+                bool isSelected = (selectedBackend == 2);
+                if (ImGui::Selectable("Metal", isSelected)) {
+                    selectedBackend = 2;
+                }
+                if (isSelected) ImGui::SetItemDefaultFocus();
+            }
+            if (webgpuAvailable) {
+                bool isSelected = (selectedBackend == 3);
+                if (ImGui::Selectable("WebGPU", isSelected)) {
+                    selectedBackend = 3;
+                }
+                if (isSelected) ImGui::SetItemDefaultFocus();
+            }
+            ImGui::EndCombo();
+        }
+
+        // Trigger backend switch if selection changed
+        if (selectedBackend != previousBackend) {
+            rhi::GraphicsAPI targetAPI = rhi::GraphicsAPI::Vulkan;
+            switch (selectedBackend) {
+                case 0: targetAPI = rhi::GraphicsAPI::Vulkan; break;
+                case 1: targetAPI = rhi::GraphicsAPI::Direct3D12; break;
+                case 2: targetAPI = rhi::GraphicsAPI::Metal; break;
+                case 3: targetAPI = rhi::GraphicsAPI::WebGPU; break;
+            }
+            m_PendingBackendAPI = targetAPI;
+            m_HasPendingBackendSwitch = true;
+        }
+    }
+    ImGui::Spacing();
+
+    // ── Rendering Controls ────────────────────────────────────────────────────
+    if (ImGui::CollapsingHeader("Rendering Controls", ImGuiTreeNodeFlags_DefaultOpen)) {
+        // Model selection
+        const char* modelNames[] = {
+            "Antique Camera",
+            "Bunny",
+            "Damaged Helmet",
+            "Metal Rough Spheres"
+        };
+        int currentModel = m_CurrentModelIndex;
+        if (ImGui::Combo("Model", &currentModel, modelNames, IM_ARRAYSIZE(modelNames))) {
+            if (currentModel != m_CurrentModelIndex) {
+                m_CurrentModelIndex = currentModel;
+                m_PendingModelPath = m_AvailableModels[m_CurrentModelIndex];
+                m_HasPendingModel = true;
+            }
+        }
+
+        ImGui::Spacing();
+
+        // Exposure slider
+        ImGui::SliderFloat("Exposure", &m_Exposure, 0.1f, 5.0f);
+    }
+    ImGui::Spacing();
+
     // ── Performance Metrics ──────────────────────────────────────────────────
-    if (ImGui::CollapsingHeader("Performance", ImGuiTreeNodeFlags_DefaultOpen)) {
+    if (ImGui::CollapsingHeader("Performance")) {
         ImGui::Text("Frame Time:   %.2f ms  (%.0f FPS)", m_DisplayFrameTimeMs, m_DisplayFps);
         ImGui::Text("Draw Calls:   %u", m_Metrics.drawCalls);
         ImGui::Text("Triangles:    %s", [&]() -> std::string {
@@ -2293,7 +2467,7 @@ void Application::RenderImGui(Ref<rhi::CommandBuffer> cmd, Ref<rhi::Texture> bac
     ImGui::Spacing();
 
     // ── Rendering Optimizations ──────────────────────────────────────────────
-    if (ImGui::CollapsingHeader("Optimizations", ImGuiTreeNodeFlags_DefaultOpen)) {
+    if (ImGui::CollapsingHeader("Optimizations")) {
         // Frustum culling
         ImGui::Checkbox("Frustum Culling", &m_EnableFrustumCulling);
 
@@ -2324,231 +2498,83 @@ void Application::RenderImGui(Ref<rhi::CommandBuffer> cmd, Ref<rhi::Texture> bac
     }
     ImGui::Spacing();
 
-    // Graphics Backend Info
-    ImGui::Text("Graphics Backend");
-    ImGui::Separator();
+    // ── Image-Based Lighting ──────────────────────────────────────────────────
+    if (ImGui::CollapsingHeader("Image-Based Lighting")) {
+        ImGui::Checkbox("Enable IBL", &m_EnableIBL);
 
-    // Display current backend info
-    const auto& deviceInfo = m_Device->GetDeviceInfo();
-    const char* currentApiName = "Unknown";
-    switch (deviceInfo.api) {
-        case rhi::GraphicsAPI::Vulkan: currentApiName = "Vulkan"; break;
-        case rhi::GraphicsAPI::Direct3D12: currentApiName = "D3D12"; break;
-        case rhi::GraphicsAPI::Metal: currentApiName = "Metal"; break;
-        case rhi::GraphicsAPI::WebGPU: currentApiName = "WebGPU"; break;
+        if (m_EnableIBL) {
+            ImGui::SliderFloat("IBL Intensity", &m_IBLIntensity, 0.0f, 2.0f);
+        }
     }
-    ImGui::Text("API: %s", currentApiName);
-    ImGui::Text("Device: %s", deviceInfo.deviceName.c_str());
-
-    // Backend selection combo (for next launch)
-    static int selectedBackend = static_cast<int>(m_Config.graphicsAPI);
-    const char* backendNames[] = { "Vulkan", "D3D12", "Metal", "WebGPU" };
-
-    // Determine which backends are available
-    bool vulkanAvailable = false;
-    bool metalAvailable = false;
-    bool webgpuAvailable = false;
-#ifdef METAGFX_USE_VULKAN
-    vulkanAvailable = true;
-#endif
-#ifdef METAGFX_USE_METAL
-    metalAvailable = true;
-#endif
-#ifdef METAGFX_USE_WEBGPU
-    webgpuAvailable = true;
-#endif
-
     ImGui::Spacing();
-    ImGui::Text("Change Backend (requires restart):");
 
-    // Show combo with only available backends
-    int previousBackend = selectedBackend;
-    if (ImGui::BeginCombo("##backend", backendNames[selectedBackend])) {
-        if (vulkanAvailable) {
-            bool isSelected = (selectedBackend == 0);
-            if (ImGui::Selectable("Vulkan", isSelected)) {
-                selectedBackend = 0;
+    // ── Skybox ────────────────────────────────────────────────────────────────
+    if (ImGui::CollapsingHeader("Skybox")) {
+        ImGui::Checkbox("Show Skybox", &m_ShowSkybox);
+
+        if (m_ShowSkybox) {
+            ImGui::SliderFloat("Skybox Blur", &m_SkyboxLOD, 0.0f, 5.0f);
+        }
+    }
+    ImGui::Spacing();
+
+    // ── Shadow Mapping ────────────────────────────────────────────────────────
+    if (ImGui::CollapsingHeader("Shadow Mapping")) {
+        if (ImGui::Checkbox("Enable Shadows", &m_EnableShadows)) {
+            METAGFX_INFO << "Shadow enabled state changed to: " << (m_EnableShadows ? "ENABLED" : "DISABLED");
+        }
+
+        ImGui::Checkbox("Show Ground Plane", &m_ShowGroundPlane);
+
+        if (m_EnableShadows) {
+            ImGui::Spacing();
+
+            if (ImGui::SliderFloat("Shadow Bias", &m_ShadowBias, 0.0f, 0.01f, "%.5f")) {
+                // Shadow bias will be updated in the next frame's render pass
             }
-            if (isSelected) ImGui::SetItemDefaultFocus();
-        }
-        // D3D12 - index 1 (Windows only, not implemented yet)
-        if (metalAvailable) {
-            bool isSelected = (selectedBackend == 2);
-            if (ImGui::Selectable("Metal", isSelected)) {
-                selectedBackend = 2;
+
+            ImGui::Text("Light Direction:");
+            ImGui::SliderFloat("Light X", &m_LightDirection.x, -2.0f, 2.0f);
+            ImGui::SliderFloat("Light Y", &m_LightDirection.y, -2.0f, 2.0f);
+            ImGui::SliderFloat("Light Z", &m_LightDirection.z, -2.0f, 2.0f);
+            if (ImGui::Button("Reset Light Direction")) {
+                m_LightDirection = glm::vec3(0.5f, -1.0f, -0.3f);
             }
-            if (isSelected) ImGui::SetItemDefaultFocus();
-        }
-        if (webgpuAvailable) {
-            bool isSelected = (selectedBackend == 3);
-            if (ImGui::Selectable("WebGPU", isSelected)) {
-                selectedBackend = 3;
+
+            ImGui::Spacing();
+
+            const char* debugModes[] = {
+                "Off",
+                "Shadow Factor",
+                "Normals",
+                "Depth & Factor",
+                "Depth Color",
+                "Shadow Grayscale",
+                "Depth vs Sample"
+            };
+            if (ImGui::Combo("Debug Mode", &m_ShadowDebugMode, debugModes, 7)) {
+                m_VisualizeShadowMap = (m_ShadowDebugMode > 0);
             }
-            if (isSelected) ImGui::SetItemDefaultFocus();
+
+            if (m_ShadowDebugMode == 1) {
+                ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f), "  White = lit, Black = shadowed");
+            } else if (m_ShadowDebugMode == 2) {
+                ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f), "  RGB = vertex normals");
+            } else if (m_ShadowDebugMode == 3) {
+                ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f), "  Split: world pos | light space pos");
+            } else if (m_ShadowDebugMode == 4) {
+                ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f), "  RGB = proj XY + depth");
+            } else if (m_ShadowDebugMode == 5) {
+                ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f), "  Grayscale shadow factor");
+            } else if (m_ShadowDebugMode == 6) {
+                ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f), "  R = depth, G = comparison result");
+            }
+
         }
-        ImGui::EndCombo();
-    }
-
-    // Save to config file if selection changed
-    if (selectedBackend != previousBackend) {
-        const char* backendStr = "Vulkan";
-        switch (selectedBackend) {
-            case 0: backendStr = "Vulkan"; break;
-            case 1: backendStr = "Direct3D12"; break;
-            case 2: backendStr = "Metal"; break;
-            case 3: backendStr = "WebGPU"; break;
-        }
-        std::ofstream configFile("metagfx.cfg");
-        if (configFile.is_open()) {
-            configFile << "backend=" << backendStr << std::endl;
-            configFile.close();
-            METAGFX_INFO << "Saved backend preference: " << backendStr;
-        }
-    }
-
-    // Show warning if selection differs from current
-    if (selectedBackend != static_cast<int>(deviceInfo.api)) {
-        ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.0f, 1.0f), "Restart required to apply change");
-    }
-
-    ImGui::Spacing();
-    ImGui::Separator();
-    ImGui::Text("Rendering Controls");
-    ImGui::Separator();
-
-    // Model selection
-    const char* modelNames[] = {
-        "Antique Camera",
-        "Bunny",
-        "Damaged Helmet",
-        "Metal Rough Spheres"
-    };
-    int currentModel = m_CurrentModelIndex;
-    if (ImGui::Combo("Model", &currentModel, modelNames, IM_ARRAYSIZE(modelNames))) {
-        if (currentModel != m_CurrentModelIndex) {
-            m_CurrentModelIndex = currentModel;
-            m_PendingModelPath = m_AvailableModels[m_CurrentModelIndex];
-            m_HasPendingModel = true;
-        }
-    }
-
-    ImGui::Spacing();
-
-    // Exposure slider
-    ImGui::SliderFloat("Exposure", &m_Exposure, 0.1f, 5.0f);
-
-    ImGui::Spacing();
-    ImGui::Separator();
-    ImGui::Text("Image-Based Lighting");
-    ImGui::Separator();
-
-    // IBL toggle
-    ImGui::Checkbox("Enable IBL", &m_EnableIBL);
-
-    // IBL intensity slider (only show when IBL is enabled)
-    if (m_EnableIBL) {
-        ImGui::SliderFloat("IBL Intensity", &m_IBLIntensity, 0.0f, 2.0f);
-        ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "Status: Active");
-        ImGui::Text("Environment lighting enabled");
-    } else {
-        ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.0f, 1.0f), "Status: Disabled");
-        ImGui::Text("Using simple ambient (3%%)");
-    }
-
-    ImGui::Spacing();
-    ImGui::Text("Tip: Toggle to see the difference!");
-
-    ImGui::Spacing();
-    ImGui::Separator();
-    ImGui::Text("Skybox");
-    ImGui::Separator();
-
-    // Skybox toggle
-    ImGui::Checkbox("Show Skybox", &m_ShowSkybox);
-
-    // Skybox LOD slider (only show when skybox is enabled)
-    if (m_ShowSkybox) {
-        ImGui::SliderFloat("Skybox Blur", &m_SkyboxLOD, 0.0f, 5.0f);
-        ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "Status: Visible");
-        ImGui::Text("Environment map displayed");
-    } else {
-        ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.0f, 1.0f), "Status: Hidden");
-        ImGui::Text("Using solid color background");
-    }
-
-    ImGui::Spacing();
-    ImGui::Separator();
-    ImGui::Text("Shadow Mapping");
-    ImGui::Separator();
-
-    // Shadow toggle
-    if (ImGui::Checkbox("Enable Shadows", &m_EnableShadows)) {
-        METAGFX_INFO << "Shadow enabled state changed to: " << (m_EnableShadows ? "ENABLED" : "DISABLED");
-    }
-
-    // Ground plane toggle
-    ImGui::Checkbox("Show Ground Plane", &m_ShowGroundPlane);
-
-    // Shadow controls (only show when shadows are enabled)
-    if (m_EnableShadows) {
-        // Shadow bias slider
-        if (ImGui::SliderFloat("Shadow Bias", &m_ShadowBias, 0.0f, 0.01f, "%.5f")) {
-            // Shadow bias will be updated in the next frame's render pass
-        }
-
-        // Light direction controls
-        ImGui::Text("Light Direction:");
-        ImGui::SliderFloat("Light X", &m_LightDirection.x, -2.0f, 2.0f);
-        ImGui::SliderFloat("Light Y", &m_LightDirection.y, -2.0f, 2.0f);
-        ImGui::SliderFloat("Light Z", &m_LightDirection.z, -2.0f, 2.0f);
-        if (ImGui::Button("Reset Light Direction")) {
-            m_LightDirection = glm::vec3(0.5f, -1.0f, -0.3f);
-        }
-
-        // Shadow debug mode selector
-        const char* debugModes[] = {
-            "Off",
-            "Shadow Factor",
-            "Normals",
-            "Depth & Factor",
-            "Depth Color",
-            "Shadow Grayscale",
-            "Depth vs Sample"
-        };
-        if (ImGui::Combo("Debug Mode", &m_ShadowDebugMode, debugModes, 7)) {
-            m_VisualizeShadowMap = (m_ShadowDebugMode > 0);
-        }
-
-        if (m_ShadowDebugMode == 1) {
-            ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f), "  White = lit, Black = shadowed");
-        } else if (m_ShadowDebugMode == 2) {
-            ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f), "  RGB = vertex normals");
-        } else if (m_ShadowDebugMode == 3) {
-            ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f), "  Split: world pos | light space pos");
-        } else if (m_ShadowDebugMode == 4) {
-            ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f), "  RGB = proj XY + depth");
-        } else if (m_ShadowDebugMode == 5) {
-            ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f), "  Grayscale shadow factor");
-        } else if (m_ShadowDebugMode == 6) {
-            ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f), "  R = depth, G = comparison result");
-        }
-
-        ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "Status: Active");
-        if (m_ShadowMap) {
-            ImGui::Text("Shadow Map: %ux%u", m_ShadowMap->GetWidth(), m_ShadowMap->GetHeight());
-            ImGui::Text("Using PCF (3x3 kernel)");
-        }
-
-        ImGui::Spacing();
-        ImGui::Text("Tip: Adjust bias to reduce acne");
-    } else {
-        ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.0f, 1.0f), "Status: Disabled");
-        ImGui::Text("No shadow rendering");
     }
 
     // Demo window toggle
     ImGui::Spacing();
-    ImGui::Separator();
     ImGui::Checkbox("Show Demo Window", &m_ShowDemoWindow);
 
     ImGui::End();
