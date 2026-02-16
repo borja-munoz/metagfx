@@ -1,0 +1,342 @@
+# ============================================================================
+# Cornell Box - PBRT v4 test scene for MetaGFX milestone 5.1
+#
+# Classic Cornell box geometry (dimensions from the original paper):
+#   x: 0..555  (left=0=red, right=555=green)
+#   y: 0..548.8 (floor=0, ceiling=548.8)
+#   z: 0..559.2 (open front, back wall at 559.2)
+#
+# Camera looks from z=-800 into the box (positive z direction).
+# ============================================================================
+
+LookAt  278  273  -800
+        278  273     0
+          0    1     0
+
+Camera "perspective"
+    "float fov" [39.3143]
+
+Film "rgb"
+    "integer xresolution" [512]
+    "integer yresolution" [512]
+    "string filename" ["cornell-box.exr"]
+
+Sampler "halton"
+Integrator "volpath"
+
+WorldBegin
+
+# ── Lights ─────────────────────────────────────────────────────────────────
+
+# Main point light near the ceiling light panel position
+AttributeBegin
+    LightSource "point"
+        "point3 from" [278 545 279.5]
+        "rgb I"       [1 1 1]
+        "float scale" [60000]
+AttributeEnd
+
+# Soft fill light from above-front to avoid fully dark shadows
+AttributeBegin
+    LightSource "distant"
+        "point3 from" [278 800 -300]
+        "point3 to"   [278 270 279.5]
+        "rgb L"       [1 1 1]
+        "float scale" [1.5]
+AttributeEnd
+
+# ── Named materials ─────────────────────────────────────────────────────────
+
+MakeNamedMaterial "white"
+    "string type"    ["diffuse"]
+    "rgb reflectance" [0.730 0.730 0.730]
+
+MakeNamedMaterial "red"
+    "string type"    ["diffuse"]
+    "rgb reflectance" [0.630 0.065 0.050]
+
+MakeNamedMaterial "green"
+    "string type"    ["diffuse"]
+    "rgb reflectance" [0.140 0.450 0.091]
+
+# ── Floor  (y = 0, normal = +Y) ─────────────────────────────────────────────
+AttributeBegin
+    NamedMaterial "white"
+    Shape "trianglemesh"
+        "integer indices" [0 1 2  0 2 3]
+        "point3 P" [
+              0   0       0
+            555   0       0
+            555   0   559.2
+              0   0   559.2
+        ]
+        "normal3 N" [
+            0 1 0
+            0 1 0
+            0 1 0
+            0 1 0
+        ]
+AttributeEnd
+
+# ── Ceiling  (y = 548.8, normal = -Y) ───────────────────────────────────────
+AttributeBegin
+    NamedMaterial "white"
+    Shape "trianglemesh"
+        "integer indices" [0 1 2  0 2 3]
+        "point3 P" [
+              0  548.8     0
+            555  548.8     0
+            555  548.8  559.2
+              0  548.8  559.2
+        ]
+        "normal3 N" [
+            0 -1 0
+            0 -1 0
+            0 -1 0
+            0 -1 0
+        ]
+AttributeEnd
+
+# ── Back wall  (z = 559.2, normal = -Z) ─────────────────────────────────────
+AttributeBegin
+    NamedMaterial "white"
+    Shape "trianglemesh"
+        "integer indices" [0 1 2  0 2 3]
+        "point3 P" [
+              0     0  559.2
+            555     0  559.2
+            555  548.8  559.2
+              0  548.8  559.2
+        ]
+        "normal3 N" [
+            0 0 -1
+            0 0 -1
+            0 0 -1
+            0 0 -1
+        ]
+AttributeEnd
+
+# ── Left wall / Red  (x = 0, normal = +X) ───────────────────────────────────
+AttributeBegin
+    NamedMaterial "red"
+    Shape "trianglemesh"
+        "integer indices" [0 1 2  0 2 3]
+        "point3 P" [
+            0     0       0
+            0     0   559.2
+            0  548.8  559.2
+            0  548.8     0
+        ]
+        "normal3 N" [
+            1 0 0
+            1 0 0
+            1 0 0
+            1 0 0
+        ]
+AttributeEnd
+
+# ── Right wall / Green  (x = 555, normal = -X) ──────────────────────────────
+AttributeBegin
+    NamedMaterial "green"
+    Shape "trianglemesh"
+        "integer indices" [0 1 2  0 2 3]
+        "point3 P" [
+            555     0       0
+            555     0   559.2
+            555  548.8  559.2
+            555  548.8     0
+        ]
+        "normal3 N" [
+            -1 0 0
+            -1 0 0
+            -1 0 0
+            -1 0 0
+        ]
+AttributeEnd
+
+# ── Short box  ──────────────────────────────────────────────────────────────
+# Approximate positions from the original Cornell box reference data
+
+# Top face
+AttributeBegin
+    NamedMaterial "white"
+    Shape "trianglemesh"
+        "integer indices" [0 1 2  0 2 3]
+        "point3 P" [
+            130  165  65
+             82  165  225
+            240  165  272
+            290  165  114
+        ]
+        "normal3 N" [0 1 0  0 1 0  0 1 0  0 1 0]
+AttributeEnd
+
+# Front face of short box
+AttributeBegin
+    NamedMaterial "white"
+    Shape "trianglemesh"
+        "integer indices" [0 1 2  0 2 3]
+        "point3 P" [
+            290    0  114
+            290  165  114
+            240  165  272
+            240    0  272
+        ]
+        "normal3 N" [
+            0.9534  0  0.3019
+            0.9534  0  0.3019
+            0.9534  0  0.3019
+            0.9534  0  0.3019
+        ]
+AttributeEnd
+
+# Right face of short box
+AttributeBegin
+    NamedMaterial "white"
+    Shape "trianglemesh"
+        "integer indices" [0 1 2  0 2 3]
+        "point3 P" [
+            130    0   65
+            130  165   65
+            290  165  114
+            290    0  114
+        ]
+        "normal3 N" [
+            0.2955  0  -0.9553
+            0.2955  0  -0.9553
+            0.2955  0  -0.9553
+            0.2955  0  -0.9553
+        ]
+AttributeEnd
+
+# Left face of short box
+AttributeBegin
+    NamedMaterial "white"
+    Shape "trianglemesh"
+        "integer indices" [0 1 2  0 2 3]
+        "point3 P" [
+             82    0  225
+             82  165  225
+            130  165   65
+            130    0   65
+        ]
+        "normal3 N" [
+            -0.9534  0  -0.3019
+            -0.9534  0  -0.3019
+            -0.9534  0  -0.3019
+            -0.9534  0  -0.3019
+        ]
+AttributeEnd
+
+# Back face of short box
+AttributeBegin
+    NamedMaterial "white"
+    Shape "trianglemesh"
+        "integer indices" [0 1 2  0 2 3]
+        "point3 P" [
+            240    0  272
+            240  165  272
+             82  165  225
+             82    0  225
+        ]
+        "normal3 N" [
+            -0.2955  0  0.9553
+            -0.2955  0  0.9553
+            -0.2955  0  0.9553
+            -0.2955  0  0.9553
+        ]
+AttributeEnd
+
+# ── Tall box  ───────────────────────────────────────────────────────────────
+
+# Top face
+AttributeBegin
+    NamedMaterial "white"
+    Shape "trianglemesh"
+        "integer indices" [0 1 2  0 2 3]
+        "point3 P" [
+            423  330  247
+            265  330  296
+            314  330  456
+            472  330  406
+        ]
+        "normal3 N" [0 1 0  0 1 0  0 1 0  0 1 0]
+AttributeEnd
+
+# Front face of tall box
+AttributeBegin
+    NamedMaterial "white"
+    Shape "trianglemesh"
+        "integer indices" [0 1 2  0 2 3]
+        "point3 P" [
+            423    0  247
+            423  330  247
+            472  330  406
+            472    0  406
+        ]
+        "normal3 N" [
+            0.9553  0  -0.2955
+            0.9553  0  -0.2955
+            0.9553  0  -0.2955
+            0.9553  0  -0.2955
+        ]
+AttributeEnd
+
+# Left face of tall box
+AttributeBegin
+    NamedMaterial "white"
+    Shape "trianglemesh"
+        "integer indices" [0 1 2  0 2 3]
+        "point3 P" [
+            265    0  296
+            265  330  296
+            423  330  247
+            423    0  247
+        ]
+        "normal3 N" [
+            -0.3019  0  -0.9534
+            -0.3019  0  -0.9534
+            -0.3019  0  -0.9534
+            -0.3019  0  -0.9534
+        ]
+AttributeEnd
+
+# Right face of tall box
+AttributeBegin
+    NamedMaterial "white"
+    Shape "trianglemesh"
+        "integer indices" [0 1 2  0 2 3]
+        "point3 P" [
+            472    0  406
+            472  330  406
+            314  330  456
+            314    0  456
+        ]
+        "normal3 N" [
+            0.3019  0  0.9534
+            0.3019  0  0.9534
+            0.3019  0  0.9534
+            0.3019  0  0.9534
+        ]
+AttributeEnd
+
+# Back face of tall box
+AttributeBegin
+    NamedMaterial "white"
+    Shape "trianglemesh"
+        "integer indices" [0 1 2  0 2 3]
+        "point3 P" [
+            314    0  456
+            314  330  456
+            265  330  296
+            265    0  296
+        ]
+        "normal3 N" [
+            -0.9553  0  0.2955
+            -0.9553  0  0.2955
+            -0.9553  0  0.2955
+            -0.9553  0  0.2955
+        ]
+AttributeEnd
+
+WorldEnd

@@ -32,6 +32,7 @@
 #include "metagfx/scene/Material.h"
 #include "metagfx/scene/Mesh.h"
 #include "metagfx/scene/ShadowMap.h"
+#include "metagfx/scene/pbrt/PbrtLoader.h"
 #include "metagfx/utils/TextureUtils.h"
 #include <SDL3/SDL.h>
 #include <glm/glm.hpp>
@@ -118,9 +119,12 @@ void Application::Init() {
         "/Users/Borja/dev/borja-munoz/metagfx/assets/models/AntiqueCamera.glb",
         "/Users/Borja/dev/borja-munoz/metagfx/assets/models/bunny_tex_coords.obj",
         "/Users/Borja/dev/borja-munoz/metagfx/assets/models/DamagedHelmet.glb",
-        "/Users/Borja/dev/borja-munoz/metagfx/assets/models/MetalRoughSpheres.glb"
+        "/Users/Borja/dev/borja-munoz/metagfx/assets/models/MetalRoughSpheres.glb",
+        "/Users/Borja/dev/borja-munoz/metagfx/assets/scenes/cornell-box.pbrt",
+        "/Users/Borja/dev/borja-munoz/metagfx/assets/scenes/cornell-box/scene-v4.pbrt",
+        "/Users/Borja/dev/borja-munoz/metagfx/assets/scenes/contemporary-bathroom/contemporary-bathroom.pbrt"
     };
-    m_CurrentModelIndex = 2;
+    m_CurrentModelIndex = 4;  // Default: Cornell Box
 
     InitGPUResources();
     m_Running = true;
@@ -550,6 +554,54 @@ void Application::InitGPUResources() {
 void Application::LoadModel(const std::string& path) {
     METAGFX_INFO << "Loading model: " << path;
 
+    // ── PBRT v4 scene files ───────────────────────────────────────────────────
+    if (path.size() > 5 && path.rfind(".pbrt") == path.size() - 5) {
+        auto result = PbrtLoader::Load(m_Device.get(), path, m_Scene.get());
+
+        if (!result.model || !result.model->IsValid()) {
+            METAGFX_WARN << "PBRT load failed: " << path << " — using fallback cube";
+            m_Model = std::make_unique<Model>();
+            m_Model->CreateCube(m_Device.get(), 1.0f);
+        } else {
+            m_Model = std::move(result.model);
+        }
+
+        // Apply PBRT camera if defined; otherwise frame the bounding box normally
+        if (result.camera.defined) {
+            float aspect  = static_cast<float>(m_Config.width) / static_cast<float>(m_Config.height);
+            float eyeDist = glm::length(result.camera.eye - result.camera.look);
+            float farPlane = eyeDist * 100.0f;
+            m_Camera->SetPerspective(result.camera.fov, aspect, 0.1f, farPlane);
+            // Orbit around the model center so the user can orbit freely around the scene
+            glm::vec3 orbitCenter = m_Model->GetCenter();
+            m_Camera->SetPosition(result.camera.eye);
+            m_Camera->LookAt(orbitCenter, result.camera.up);
+            m_Camera->SetOrbitTarget(orbitCenter);
+        } else {
+            glm::vec3 center = m_Model->GetCenter();
+            glm::vec3 size   = m_Model->GetSize();
+            m_Camera->FrameBoundingBox(center, size, 1.3f);
+        }
+
+        // PBRT scenes are self-contained: hide the ground plane and skybox so
+        // they don't intrude on the scene's own geometry and environment.
+        m_ShowGroundPlane = false;
+        m_ShowSkybox      = false;
+
+        UpdateGroundPlanePosition();
+
+        m_Device->WaitIdle();
+        if (m_Config.graphicsAPI != rhi::GraphicsAPI::WebGPU && m_DescriptorSet[0]) {
+            const auto& meshes = m_Model->GetMeshes();
+            if (!meshes.empty() && meshes[0] && meshes[0]->GetMaterial()) {
+                UpdateModelDescriptorTextures(meshes[0]->GetMaterial());
+            }
+        }
+        CreateMeshDescriptorSets();
+        return;
+    }
+
+    // ── Regular model files (Assimp) ──────────────────────────────────────────
     m_Model = std::make_unique<Model>();
     if (!m_Model->LoadFromFile(m_Device.get(), path)) {
         METAGFX_WARN << "Failed to load " << path << ", creating fallback cube";
@@ -559,6 +611,10 @@ void Application::LoadModel(const std::string& path) {
             return;
         }
     }
+
+    // Restore default scene lights (may have been replaced by a PBRT scene)
+    m_Scene->ClearLights();
+    CreateTestLights();
 
     // Extract model name from path for display
     size_t lastSlash = path.find_last_of("/\\");
@@ -585,19 +641,20 @@ void Application::LoadModel(const std::string& path) {
                  << m_Camera->GetPosition().y << ", "
                  << m_Camera->GetPosition().z << ")";
 
-    // For Vulkan/Metal: update descriptor set textures once after model load.
-    // WebGPU bind groups are rebuilt per-frame during rendering.
-    if (m_Config.graphicsAPI != rhi::GraphicsAPI::WebGPU && m_DescriptorSet[0]) {
-        // CRITICAL: Wait for all GPU work to complete before updating descriptor sets.
-        // If we update descriptor sets while they're in use by in-flight command buffers,
-        // we get undefined behavior (race condition causing flickering/corruption).
-        m_Device->WaitIdle();
+    // Wait for in-flight GPU work before touching descriptor sets / material buffers
+    m_Device->WaitIdle();
 
+    // For Vulkan/Metal: update the shared descriptor set textures (used as fallback)
+    if (m_Config.graphicsAPI != rhi::GraphicsAPI::WebGPU && m_DescriptorSet[0]) {
         const auto& meshes = m_Model->GetMeshes();
         if (!meshes.empty() && meshes[0] && meshes[0]->GetMaterial()) {
             UpdateModelDescriptorTextures(meshes[0]->GetMaterial());
         }
     }
+
+    // Build per-mesh material buffers + descriptor sets so each mesh can carry
+    // its own albedo/roughness/metallic to the GPU without being overwritten.
+    CreateMeshDescriptorSets();
 }
 
 void Application::UpdateModelDescriptorTextures(Material* material) {
@@ -645,6 +702,87 @@ void Application::UpdateModelDescriptorTextures(Material* material) {
 
         descriptorSet->Update();
     }
+}
+
+void Application::CreateMeshDescriptorSets() {
+    if (!m_Model || !m_Device) return;
+
+    // Release any previously allocated per-mesh resources
+    m_MeshMaterialBuffers.clear();
+    m_MeshDescriptorSets.clear();
+
+    const auto& meshes = m_Model->GetMeshes();
+    if (meshes.empty()) return;
+
+    auto api = m_Config.graphicsAPI;
+    // Use uniform buffer for lights on all backends - must match the shared
+    // descriptor set layout (used for pipeline layout) which also uses UniformBuffer.
+    auto lightBufferType = rhi::DescriptorType::UniformBuffer;
+
+    rhi::BufferDesc matDesc{};
+    matDesc.size        = sizeof(MaterialProperties);
+    matDesc.usage       = rhi::BufferUsage::Uniform;
+    matDesc.memoryUsage = rhi::MemoryUsage::CPUToGPU;
+
+    m_MeshMaterialBuffers.resize(meshes.size());
+    m_MeshDescriptorSets.resize(meshes.size());
+
+    for (size_t i = 0; i < meshes.size(); ++i) {
+        const auto& mesh = meshes[i];
+        Material* mat = (mesh && mesh->GetMaterial()) ? mesh->GetMaterial() : nullptr;
+
+        // Allocate and fill the per-mesh material buffer once (mesh materials don't change at runtime)
+        m_MeshMaterialBuffers[i] = m_Device->CreateBuffer(matDesc);
+        if (mat) {
+            MaterialProperties props = mat->GetProperties();
+            m_MeshMaterialBuffers[i]->CopyData(&props, sizeof(props));
+        } else {
+            MaterialProperties def{};
+            def.albedo    = glm::vec3(0.8f);
+            def.roughness = 0.5f;
+            def.metallic  = 0.0f;
+            m_MeshMaterialBuffers[i]->CopyData(&def, sizeof(def));
+        }
+
+        // Resolve per-mesh texture bindings
+        Ref<rhi::Texture> albedoMap      = mat ? mat->GetAlbedoMap()              : nullptr;
+        Ref<rhi::Texture> normalMap      = mat ? mat->GetNormalMap()               : nullptr;
+        Ref<rhi::Texture> mrMap          = mat ? mat->GetMetallicRoughnessMap()    : nullptr;
+        Ref<rhi::Texture> metallicMap    = mat ? mat->GetMetallicMap()             : nullptr;
+        Ref<rhi::Texture> roughnessMap   = mat ? mat->GetRoughnessMap()            : nullptr;
+        Ref<rhi::Texture> aoMap          = mat ? mat->GetAOMap()                   : nullptr;
+        Ref<rhi::Texture> emissiveMap    = mat ? mat->GetEmissiveMap()             : nullptr;
+        Ref<rhi::Texture> metallicTex    = mrMap  ? mrMap  : (metallicMap  ? metallicMap  : m_DefaultWhiteTexture);
+        Ref<rhi::Texture> roughnessTex   = mrMap  ? mrMap  : (roughnessMap ? roughnessMap : m_DefaultWhiteTexture);
+
+        // Create one descriptor set per frame (MVP / push-constant buffer are per-frame)
+        for (uint32 frame = 0; frame < 2; ++frame) {
+            using rhi::DescriptorBindingDesc;
+            std::vector<DescriptorBindingDesc> bindings = {
+                { BINDING(api, ModelBindings::MVP),           rhi::DescriptorType::UniformBuffer,  rhi::ShaderStage::Vertex,   m_UniformBuffers[frame],                nullptr,                                      nullptr                },
+                { BINDING(api, ModelBindings::MATERIAL),      rhi::DescriptorType::UniformBuffer,  rhi::ShaderStage::Fragment, m_MeshMaterialBuffers[i],               nullptr,                                      nullptr                },
+                { BINDING(api, ModelBindings::ALBEDO),        rhi::DescriptorType::SampledTexture, rhi::ShaderStage::Fragment, nullptr,                                albedoMap ? albedoMap : m_DefaultTexture,     m_LinearRepeatSampler  },
+                { BINDING(api, ModelBindings::LIGHTS),        lightBufferType,                     rhi::ShaderStage::Fragment, m_Scene->GetLightBuffer(),              nullptr,                                      nullptr                },
+                { BINDING(api, ModelBindings::NORMAL),        rhi::DescriptorType::SampledTexture, rhi::ShaderStage::Fragment, nullptr,                                normalMap ? normalMap : m_DefaultNormalMap,   m_LinearRepeatSampler  },
+                { BINDING(api, ModelBindings::METALLIC),      rhi::DescriptorType::SampledTexture, rhi::ShaderStage::Fragment, nullptr,                                metallicTex,                                  m_LinearRepeatSampler  },
+                { BINDING(api, ModelBindings::ROUGHNESS),     rhi::DescriptorType::SampledTexture, rhi::ShaderStage::Fragment, nullptr,                                roughnessTex,                                 m_LinearRepeatSampler  },
+                { BINDING(api, ModelBindings::AO),            rhi::DescriptorType::SampledTexture, rhi::ShaderStage::Fragment, nullptr,                                aoMap ? aoMap : m_DefaultWhiteTexture,        m_LinearRepeatSampler  },
+                { BINDING(api, ModelBindings::IRRADIANCE),    rhi::DescriptorType::SampledTexture, rhi::ShaderStage::Fragment, nullptr,                                m_IrradianceMap,                              m_CubemapSampler       },
+                { BINDING(api, ModelBindings::PREFILTERED),   rhi::DescriptorType::SampledTexture, rhi::ShaderStage::Fragment, nullptr,                                m_PrefilteredMap,                             m_CubemapSampler       },
+                { BINDING(api, ModelBindings::BRDF_LUT),      rhi::DescriptorType::SampledTexture, rhi::ShaderStage::Fragment, nullptr,                                m_BRDF_LUT,                                   m_LinearRepeatSampler  },
+                { BINDING(api, ModelBindings::EMISSIVE),      rhi::DescriptorType::SampledTexture, rhi::ShaderStage::Fragment, nullptr,                                emissiveMap ? emissiveMap : m_DefaultBlackTexture, m_LinearRepeatSampler },
+                { BINDING(api, ModelBindings::SHADOWMAP),     rhi::DescriptorType::SampledTexture, rhi::ShaderStage::Fragment, nullptr,                                m_ShadowMap->GetDepthTexture(),               m_ShadowMap->GetSampler() },
+                { BINDING(api, ModelBindings::SHADOW_UBO),    rhi::DescriptorType::UniformBuffer,  rhi::ShaderStage::Fragment, m_ShadowUniformBuffer,                  nullptr,                                      nullptr                },
+                { BINDING(api, ModelBindings::PUSH_CONSTANTS),rhi::DescriptorType::UniformBuffer,  rhi::ShaderStage::Fragment, m_ModelPushConstantBuffer[frame],        nullptr,                                      nullptr                },
+            };
+            rhi::DescriptorSetDesc desc{};
+            desc.bindings = bindings;
+            m_MeshDescriptorSets[i][frame] = m_Device->CreateDescriptorSet(desc);
+        }
+    }
+
+    METAGFX_INFO << "CreateMeshDescriptorSets: created " << meshes.size()
+                 << " per-mesh descriptor set pair(s)";
 }
 
 void Application::LoadNextModel() {
@@ -887,8 +1025,8 @@ void Application::CreateModelPipeline() {
     };
 
     pipelineDesc.topology = rhi::PrimitiveTopology::TriangleList;
-    pipelineDesc.rasterization.cullMode = rhi::CullMode::Back;
-    pipelineDesc.rasterization.frontFace = rhi::FrontFace::CounterClockwise;  // glTF uses CCW winding order
+    pipelineDesc.rasterization.cullMode = rhi::CullMode::None;  // Cornell box interior + other scenes
+    pipelineDesc.rasterization.frontFace = rhi::FrontFace::CounterClockwise;
 
     // Enable depth testing for proper 3D rendering
     pipelineDesc.depthStencil.depthTestEnable = true;
@@ -1596,9 +1734,8 @@ void Application::Render() {
 
     // Begin rendering
     ClearValue colorClear{};
-    // DEBUG: Use bright green to identify clear color
-    colorClear.color[0] = 0.0f;  // Green
-    colorClear.color[1] = 1.0f;
+    colorClear.color[0] = 0.0f;
+    colorClear.color[1] = 0.0f;
     colorClear.color[2] = 0.0f;
     colorClear.color[3] = 1.0f;
 
@@ -1636,9 +1773,8 @@ void Application::Render() {
         cmd->BindPipeline(m_ModelPipeline);
         // METAGFX_INFO << "Pipeline bound, now binding descriptor set with frameIndex=" << m_CurrentFrame;
 
-        // Bind descriptor set (use current frame index for double buffering)
-        cmd->BindDescriptorSet(m_ModelPipeline, m_DescriptorSet[m_CurrentFrame], 0);
-        // METAGFX_INFO << "Descriptor set bound successfully";
+        // Per-mesh descriptor sets are bound inside the mesh loop below.
+        // (Binding the shared set here would be overridden anyway.)
 
         // Prepare push constant data structure for all backends
         // The shader uses layout(binding = 14) uniform, so we need this uniform buffer
@@ -1707,19 +1843,28 @@ void Application::Render() {
         }
 
         // Draw all meshes in the model
-        for (const auto& mesh : m_Model->GetMeshes()) {
+        const auto& allMeshes = m_Model->GetMeshes();
+        for (size_t meshIdx = 0; meshIdx < allMeshes.size(); ++meshIdx) {
+            const auto& mesh = allMeshes[meshIdx];
             if (!modelVisible) break;
             if (mesh && mesh->IsValid() && mesh->GetMaterial()) {
                 Material* material = mesh->GetMaterial();
 
-                // Update material buffer for this mesh (use per-frame buffer)
-                MaterialProperties matProps = material->GetProperties();
-                m_MaterialBuffers[m_CurrentFrame]->CopyData(&matProps, sizeof(matProps));
-
-                // WebGPU: rebuild bind group every frame since textures may differ per mesh.
-                // Vulkan/Metal: textures are set once after model load (no per-frame mutation).
-                if (m_Config.graphicsAPI == rhi::GraphicsAPI::WebGPU) {
-                    UpdateModelDescriptorTextures(material);
+                // Bind the per-mesh descriptor set so each mesh carries its own material
+                // (albedo, roughness, metallic) and texture bindings to the GPU.
+                // This avoids the "last material wins" race where a single shared buffer
+                // is overwritten once per mesh during recording but read only after all
+                // writes are done at GPU execution time.
+                if (meshIdx < m_MeshDescriptorSets.size() && m_MeshDescriptorSets[meshIdx][m_CurrentFrame]) {
+                    cmd->BindDescriptorSet(m_ModelPipeline, m_MeshDescriptorSets[meshIdx][m_CurrentFrame], 0);
+                } else {
+                    // Fallback: shared descriptor set (single-material models / WebGPU rebuild)
+                    if (m_Config.graphicsAPI == rhi::GraphicsAPI::WebGPU) {
+                        UpdateModelDescriptorTextures(material);
+                    }
+                    // Also update the shared material buffer for the fallback path
+                    MaterialProperties matProps = material->GetProperties();
+                    m_MaterialBuffers[m_CurrentFrame]->CopyData(&matProps, sizeof(matProps));
                     cmd->BindDescriptorSet(m_ModelPipeline, m_DescriptorSet[m_CurrentFrame], 0);
                 }
 
@@ -1796,8 +1941,12 @@ void Application::Render() {
                 m_ModelPushConstantBuffer[m_CurrentFrame]->CopyData(&modelPushConst, sizeof(ModelPushConstants));
 
                 #ifdef METAGFX_USE_WEBGPU
-                // Re-bind descriptor set to ensure push constant buffer is bound (WebGPU only)
-                cmd->BindDescriptorSet(m_ModelPipeline, m_DescriptorSet[m_CurrentFrame], 0);
+                // Re-bind after updating the push constant buffer (WebGPU requires this)
+                if (meshIdx < m_MeshDescriptorSets.size() && m_MeshDescriptorSets[meshIdx][m_CurrentFrame]) {
+                    cmd->BindDescriptorSet(m_ModelPipeline, m_MeshDescriptorSets[meshIdx][m_CurrentFrame], 0);
+                } else {
+                    cmd->BindDescriptorSet(m_ModelPipeline, m_DescriptorSet[m_CurrentFrame], 0);
+                }
                 #endif
 
                 // LOD selection based on camera distance
@@ -1971,6 +2120,10 @@ void Application::ShutdownGPUResources() {
     m_SkyboxPushConstantBuffer.reset();
     m_InstanceBuffer.reset();
     m_SingleInstanceBuffer.reset();
+
+    // Clean up per-mesh resources
+    m_MeshMaterialBuffers.clear();
+    m_MeshDescriptorSets.clear();
 
     // Clean up descriptor sets
     m_DescriptorSet[0].reset();
@@ -2408,7 +2561,10 @@ void Application::RenderImGui(Ref<rhi::CommandBuffer> cmd, Ref<rhi::Texture> bac
             "Antique Camera",
             "Bunny",
             "Damaged Helmet",
-            "Metal Rough Spheres"
+            "Metal Rough Spheres",
+            "Cornell Box (PBRT)",
+            "Cornell Box Bitterli",
+            "Contemporary Bathroom"
         };
         int currentModel = m_CurrentModelIndex;
         if (ImGui::Combo("Model", &currentModel, modelNames, IM_ARRAYSIZE(modelNames))) {

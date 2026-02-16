@@ -7,12 +7,13 @@ layout(location = 2) in vec2 fragTexCoord;
 
 // Material uniform (48 bytes for std140 alignment)
 layout(binding = 1) uniform MaterialUBO {
-    vec3 albedo;       // 12 bytes (offset 0)
-    float roughness;   // 4 bytes  (offset 12)
-    float metallic;    // 4 bytes  (offset 16)
-    vec2 padding1;     // 8 bytes  (offset 20)
-    vec3 emissiveFactor; // 12 bytes (offset 28)
-    float padding2;    // 4 bytes  (offset 40)
+    vec3 albedo;         // 12 bytes (offset  0)
+    float roughness;     //  4 bytes (offset 12)
+    float metallic;      //  4 bytes (offset 16)
+    uint textureFlags;   //  4 bytes (offset 20)
+    vec2 padding1;       //  8 bytes (offset 24)
+    vec3 emissiveFactor; // 12 bytes (offset 32)
+    float padding2;      //  4 bytes (offset 44)
 } material;
 
 // PBR texture samplers
@@ -67,7 +68,7 @@ layout(binding = 3, std140) uniform LightBuffer {
 // (converted from push constants for WebGPU compatibility)
 layout(binding = 14) uniform PushConstants {
     vec4 cameraPosition;
-    uint materialFlags;
+    uint materialFlags;     // Legacy (unused, kept for struct alignment)
     float exposure;
     uint enableIBL;  // 0 = disabled, 1 = enabled
     float iblIntensity;  // IBL contribution multiplier
@@ -327,7 +328,7 @@ void main() {
 
     // Sample albedo (texture or material property)
     vec3 albedo;
-    if ((pushConstants.materialFlags & (1u << 0)) != 0u) {  // HasAlbedoMap
+    if ((material.textureFlags & (1u << 0)) != 0u) {  // HasAlbedoMap
         albedo = texture(albedoSampler, fragTexCoord).rgb;
     } else {
         albedo = material.albedo;
@@ -335,7 +336,7 @@ void main() {
 
     // Sample normal map (texture or vertex normal)
     vec3 N;
-    if ((pushConstants.materialFlags & (1u << 1)) != 0u) {  // HasNormalMap
+    if ((material.textureFlags & (1u << 1)) != 0u) {  // HasNormalMap
         N = getNormalFromMap(fragTexCoord, fragPosition, fragNormal);
     } else {
         N = normalize(fragNormal);
@@ -346,7 +347,7 @@ void main() {
     float roughness;
     float ao;
 
-    if ((pushConstants.materialFlags & (1u << 4)) != 0u) {  // HasMetallicRoughnessMap (glTF)
+    if ((material.textureFlags & (1u << 4)) != 0u) {  // HasMetallicRoughnessMap (glTF)
         // glTF 2.0 standard: R=AO, G=roughness, B=metallic
         vec3 mrSample = texture(metallicSampler, fragTexCoord).rgb;
         ao = mrSample.r;
@@ -354,19 +355,19 @@ void main() {
         metallic = mrSample.b;
     } else {
         // Separate textures or material properties
-        if ((pushConstants.materialFlags & (1u << 2)) != 0u) {  // HasMetallicMap
+        if ((material.textureFlags & (1u << 2)) != 0u) {  // HasMetallicMap
             metallic = texture(metallicSampler, fragTexCoord).r;
         } else {
             metallic = material.metallic;
         }
 
-        if ((pushConstants.materialFlags & (1u << 3)) != 0u) {  // HasRoughnessMap
+        if ((material.textureFlags & (1u << 3)) != 0u) {  // HasRoughnessMap
             roughness = texture(roughnessSampler, fragTexCoord).r;
         } else {
             roughness = material.roughness;
         }
 
-        if ((pushConstants.materialFlags & (1u << 5)) != 0u) {  // HasAOMap
+        if ((material.textureFlags & (1u << 5)) != 0u) {  // HasAOMap
             ao = texture(aoSampler, fragTexCoord).r;
         } else {
             ao = 1.0;
@@ -469,7 +470,7 @@ void main() {
     // Emissive light is self-illumination and is added AFTER lighting but BEFORE tone mapping
     // This ensures emissive materials can "bloom" in HDR and appear to glow
     vec3 emissive = vec3(0.0);
-    if ((pushConstants.materialFlags & (1u << 6)) != 0u) {  // HasEmissiveMap
+    if ((material.textureFlags & (1u << 6)) != 0u) {  // HasEmissiveMap
         emissive = texture(emissiveSampler, fragTexCoord).rgb * material.emissiveFactor;
     } else {
         emissive = material.emissiveFactor;

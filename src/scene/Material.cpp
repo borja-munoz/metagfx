@@ -13,7 +13,8 @@ Material::Material(const glm::vec3& albedo, float roughness, float metallic) {
     SetMetallic(metallic);
     SetEmissiveFactor(glm::vec3(0.0f));  // Default: no emission
 
-    // Initialize padding to zero
+    // Initialize padding and flags to zero
+    m_Properties.textureFlags = 0;
     m_Properties.padding1[0] = 0.0f;
     m_Properties.padding1[1] = 0.0f;
     m_Properties.padding2 = 0.0f;
@@ -48,6 +49,7 @@ void Material::SetAlbedoMap(Ref<rhi::Texture> texture) {
     } else {
         m_TextureFlags &= ~static_cast<uint32>(MaterialTextureFlags::HasAlbedoMap);
     }
+    m_Properties.textureFlags = m_TextureFlags;
 }
 
 void Material::SetNormalMap(Ref<rhi::Texture> texture) {
@@ -58,6 +60,7 @@ void Material::SetNormalMap(Ref<rhi::Texture> texture) {
     } else {
         m_TextureFlags &= ~static_cast<uint32>(MaterialTextureFlags::HasNormalMap);
     }
+    m_Properties.textureFlags = m_TextureFlags;
 }
 
 void Material::SetMetallicMap(Ref<rhi::Texture> texture) {
@@ -68,6 +71,7 @@ void Material::SetMetallicMap(Ref<rhi::Texture> texture) {
     } else {
         m_TextureFlags &= ~static_cast<uint32>(MaterialTextureFlags::HasMetallicMap);
     }
+    m_Properties.textureFlags = m_TextureFlags;
 }
 
 void Material::SetRoughnessMap(Ref<rhi::Texture> texture) {
@@ -78,6 +82,7 @@ void Material::SetRoughnessMap(Ref<rhi::Texture> texture) {
     } else {
         m_TextureFlags &= ~static_cast<uint32>(MaterialTextureFlags::HasRoughnessMap);
     }
+    m_Properties.textureFlags = m_TextureFlags;
 }
 
 void Material::SetMetallicRoughnessMap(Ref<rhi::Texture> texture) {
@@ -88,6 +93,7 @@ void Material::SetMetallicRoughnessMap(Ref<rhi::Texture> texture) {
     } else {
         m_TextureFlags &= ~static_cast<uint32>(MaterialTextureFlags::HasMetallicRoughnessMap);
     }
+    m_Properties.textureFlags = m_TextureFlags;
 }
 
 void Material::SetAOMap(Ref<rhi::Texture> texture) {
@@ -98,6 +104,7 @@ void Material::SetAOMap(Ref<rhi::Texture> texture) {
     } else {
         m_TextureFlags &= ~static_cast<uint32>(MaterialTextureFlags::HasAOMap);
     }
+    m_Properties.textureFlags = m_TextureFlags;
 }
 
 void Material::SetEmissiveMap(Ref<rhi::Texture> texture) {
@@ -108,6 +115,7 @@ void Material::SetEmissiveMap(Ref<rhi::Texture> texture) {
     } else {
         m_TextureFlags &= ~static_cast<uint32>(MaterialTextureFlags::HasEmissiveMap);
     }
+    m_Properties.textureFlags = m_TextureFlags;
 }
 
 } // namespace metagfx

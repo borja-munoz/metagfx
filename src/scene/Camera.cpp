@@ -227,14 +227,14 @@ void Camera::OrbitAroundTarget(float deltaYaw, float deltaPitch) {
 }
 
 void Camera::ZoomToTarget(float delta) {
-    // Adjust orbit distance
-    m_OrbitDistance -= delta * m_ZoomSensitivity;
+    // Proportional zoom: each scroll unit moves 10% of the current distance,
+    // so the camera works at any scene scale (small 1-unit models or 1000-unit scenes).
+    float factor = 1.0f - delta * 0.1f * m_ZoomSensitivity;
+    factor = glm::clamp(factor, 0.01f, 100.0f);  // prevent negative or extreme jumps
+    m_OrbitDistance *= factor;
 
-    // Clamp distance to reasonable values
-    if (m_OrbitDistance < 1.0f)
-        m_OrbitDistance = 1.0f;
-    if (m_OrbitDistance > 100.0f)
-        m_OrbitDistance = 100.0f;
+    // Allow distances from a tiny fraction of the scene up to virtually unlimited
+    if (m_OrbitDistance < 0.001f) m_OrbitDistance = 0.001f;
 
     // Recalculate position with new distance
     float yawRad = glm::radians(m_OrbitYaw);

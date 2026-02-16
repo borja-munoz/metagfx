@@ -26,14 +26,15 @@ enum class MaterialTextureFlags : uint32 {
 };
 
 // GPU-side structure (std140 layout compatible)
-// Total size: 48 bytes for optimal alignment
+// Total size: 48 bytes.  Layout must exactly match the GLSL MaterialUBO block.
 struct MaterialProperties {
-    glm::vec3 albedo;      // 12 bytes (offset 0)  - Base color
-    float roughness;       // 4 bytes  (offset 12) - Surface roughness [0,1]
-    float metallic;        // 4 bytes  (offset 16) - Metallic property [0,1]
-    float padding1[2];     // 8 bytes  (offset 20) - Padding for alignment
-    glm::vec3 emissiveFactor; // 12 bytes (offset 28) - Emissive color multiplier
-    float padding2;        // 4 bytes  (offset 40) - Padding to 48 bytes
+    glm::vec3 albedo;         // 12 bytes (offset  0)  - Base color
+    float roughness;          //  4 bytes (offset 12)  - Surface roughness [0,1]
+    float metallic;           //  4 bytes (offset 16)  - Metallic property [0,1]
+    uint32 textureFlags;      //  4 bytes (offset 20)  - MaterialTextureFlags bitmask
+    float padding1[2];        //  8 bytes (offset 24)  - Padding for vec3 alignment
+    glm::vec3 emissiveFactor; // 12 bytes (offset 32)  - Emissive color multiplier
+    float padding2;           //  4 bytes (offset 44)  - Padding to 48 bytes
 };
 
 class Material {

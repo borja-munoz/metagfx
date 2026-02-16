@@ -9,6 +9,9 @@ set(SCENE_SOURCES
     Model.cpp
     Scene.cpp
     ShadowMap.cpp
+    pbrt/PbrtLexer.cpp
+    pbrt/PbrtParser.cpp
+    pbrt/PbrtLoader.cpp
 )
 
 set(SCENE_HEADERS
@@ -19,6 +22,9 @@ set(SCENE_HEADERS
     ${CMAKE_SOURCE_DIR}/include/metagfx/scene/Model.h
     ${CMAKE_SOURCE_DIR}/include/metagfx/scene/Scene.h
     ${CMAKE_SOURCE_DIR}/include/metagfx/scene/ShadowMap.h
+    ${CMAKE_SOURCE_DIR}/include/metagfx/scene/pbrt/PbrtLexer.h
+    ${CMAKE_SOURCE_DIR}/include/metagfx/scene/pbrt/PbrtParser.h
+    ${CMAKE_SOURCE_DIR}/include/metagfx/scene/pbrt/PbrtLoader.h
 )
 
 add_library(metagfx_scene STATIC ${SCENE_SOURCES} ${SCENE_HEADERS})

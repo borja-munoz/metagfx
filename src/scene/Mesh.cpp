@@ -117,7 +117,7 @@ bool Mesh::Initialize(rhi::GraphicsDevice* device,
             if (m_LODLevels[lod].indexBuffer) {
                 m_LODLevels[lod].indexBuffer->CopyData(lodIndices.data(), lodDesc.size);
                 m_LODLevels[lod].indexCount = static_cast<uint32_t>(lodCount);
-                METAGFX_INFO << "  LOD" << (lod + 1) << ": " << lodCount << " indices ("
+                METAGFX_TRACE << "  LOD" << (lod + 1) << ": " << lodCount << " indices ("
                              << static_cast<int>(100 * lodRatios[lod]) << "% target, actual "
                              << static_cast<int>(100.0 * lodCount / indices.size()) << "%)";
             }
@@ -129,7 +129,7 @@ bool Mesh::Initialize(rhi::GraphicsDevice* device,
         m_Material = std::make_unique<Material>();
     }
 
-    METAGFX_INFO << "Mesh initialized: " <<  m_VertexCount << " vertices, " << m_IndexCount << " indices";
+    METAGFX_TRACE << "Mesh initialized: " <<  m_VertexCount << " vertices, " << m_IndexCount << " indices";
     return true;
 }
 

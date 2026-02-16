@@ -64,6 +64,7 @@ private:
     void LoadNextModel();
     void LoadPreviousModel();
     void UpdateModelDescriptorTextures(Material* material);
+    void CreateMeshDescriptorSets();
     void ProcessEvents();
     void Update(float deltaTime);
     void Render();
@@ -121,6 +122,12 @@ private:
     Ref<rhi::DescriptorSet> m_SkyboxDescriptorSet[2];  // Double-buffered for skybox
     Ref<rhi::DescriptorSet> m_ShadowDescriptorSet;  // Shadow pass (no double buffering needed)
     Ref<rhi::DescriptorSet> m_GroundPlaneDescriptorSet[2];  // Double-buffered for ground plane
+
+    // Per-mesh material support: each mesh gets its own material buffer and descriptor set pair.
+    // This prevents the "last material wins" GPU race when a single shared buffer is overwritten
+    // once per mesh during command recording but only read by the GPU after all writes are done.
+    std::vector<Ref<rhi::Buffer>> m_MeshMaterialBuffers;         // One per mesh
+    std::vector<std::array<Ref<rhi::DescriptorSet>, 2>> m_MeshDescriptorSets; // [mesh][frame]
     uint32 m_CurrentFrame = 0;
 
     // Texture resources

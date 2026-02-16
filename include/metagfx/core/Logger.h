@@ -23,16 +23,21 @@ enum class LogLevel {
 class Logger {
 public:
     static void Init();
-    
+
+    static void SetMinLevel(LogLevel level) { s_MinLevel = level; }
+    static LogLevel GetMinLevel() { return s_MinLevel; }
+
     static void Log(LogLevel level, const std::string& message);
-    
+
     template<typename... Args>
     static void LogFormatted(LogLevel level, const char* format, Args... args);
-    
+
 private:
     static const char* GetLevelString(LogLevel level);
     static const char* GetLevelColor(LogLevel level);
     static std::string GetTimestamp();
+
+    static inline LogLevel s_MinLevel = LogLevel::Info;
 };
 
 // Stream-based logger helper

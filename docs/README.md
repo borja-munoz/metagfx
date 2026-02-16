@@ -95,19 +95,18 @@ Comprehensive camera documentation (Milestones 1.4, 4.3):
 
 ---
 
-#### [Model Loading System](model_loading.md)
-**Topics**: 3D model loading, LOD, instanced rendering
+#### [Asset Loading System](asset_loading.md)
+**Topics**: 3D model loading, PBRT v4 scenes, texture loading, LOD, instanced rendering
 
-Comprehensive design documentation for models and meshes (Milestones 2.1, 4.3):
-- Mesh and Model class architecture
-- Vertex structure (position, normal, texCoord)
-- Assimp integration and supported formats (OBJ, FBX, glTF, COLLADA)
-- GPU buffer management and memory strategies
-- Procedural geometry generation (cube, sphere)
+Comprehensive asset pipeline documentation (Milestones 2.1, 2.3, 4.3, 5.1):
+- Texture loading pipeline (stb_image → CPU → GPU) with fallback textures
+- Assimp model loading: supported formats (OBJ, FBX, glTF, COLLADA), post-processing, material extraction
+- **PBRT v4 scene loading** — lexer, parser, loader; trianglemesh + plymesh shapes; all material types; conductor spectral data → RGB F0; lights and camera extraction
+- Mesh and Model class architecture; vertex layout; per-mesh material buffers and texture flags
 - **Level of Detail (LOD)** — meshoptimizer, 3 levels, distance-based selection
 - **Instanced Rendering** — per-instance mat4, vertex buffer slot 1, N×N grid, per-frame CPU culling
 - Bounding volume cache (AABB + sphere) for culling and framing
-- Error handling and fallback patterns
+- Error handling, fallback patterns, and debugging tips
 
 ---
 
@@ -274,7 +273,7 @@ Per-milestone implementation notes and artifacts:
 
 **Features**:
 1. [Camera System](camera_transformation_system.md) - Viewport, controls, framing, frustum culling
-2. [Model Loading](model_loading.md) - Asset pipeline, LOD, instancing
+2. [Asset Loading](asset_loading.md) - Asset pipeline (models, PBRT, textures), LOD, instancing
 3. [Material System](material_system.md) - Materials and lighting
 4. [Textures and Samplers](textures_and_samplers.md) - Texture system
 5. [Light System](light_system.md) - Dynamic lighting
@@ -334,7 +333,7 @@ cd bin
 ```
 
 ### Project Status
-**Current Milestone**: 4.3 (Rendering Optimizations) ✅ Complete
+**Current Milestone**: 5.1 (Basic PBRT Parser) ✅ Complete
 **Implemented Features**:
 - ✅ **Vulkan backend** (Windows, Linux, macOS)
 - ✅ **Metal backend** (macOS, iOS-ready)
@@ -359,7 +358,7 @@ cd bin
 - ✅ ImGui integration (Vulkan + Metal + WebGPU backends)
 
 **Next Milestones**:
-- 5.1: PBRT Scene Parser
+- 5.2: Advanced PBRT Features (instancing, infinite lights, procedural textures)
 - 8.1: Direct3D 12 Implementation (Windows) - Postponed to Phase 8
 
 ### Key Files
@@ -406,7 +405,7 @@ Future documentation needs:
 - [x] Lighting system design ✅ Complete (Milestone 3.1)
 - [x] PBR rendering guide ✅ Complete (Milestone 3.2)
 - [x] Shadow mapping guide ✅ Complete (Milestone 3.3)
-- [ ] PBRT scene parser guide (Phase 5)
+- [x] PBRT scene parser guide ✅ Complete (Milestone 5.1, merged into asset_loading.md)
 - [ ] Testing strategy and framework
 
 ---

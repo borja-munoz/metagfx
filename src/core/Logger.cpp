@@ -10,10 +10,12 @@ void Logger::Init() {
 }
 
 void Logger::Log(LogLevel level, const std::string& message) {
+    if (level < s_MinLevel) return;
+
     const char* color = GetLevelColor(level);
     const char* levelStr = GetLevelString(level);
     const char* reset = "\033[0m";
-    
+
     // Print: [timestamp] [LEVEL]: message
     std::cout << color << "[" << GetTimestamp() << "] "
               << "[" << levelStr << "]: " << reset
