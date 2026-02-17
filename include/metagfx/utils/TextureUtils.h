@@ -82,5 +82,28 @@ Ref<rhi::Texture> LoadDDSCubemap(
     const std::string& filepath
 );
 
+// Load a PFM (Portable Float Map) image as RGBA float data.
+// Supports color PFM ("PF") only. Free with FreeHDRImage().
+HDRImageData LoadPFMImage(const std::string& filepath);
+
+// Convert an equirectangular HDR image to a GPU cubemap texture.
+// faceSize: output resolution per face in texels (default 256).
+// Returns a TextureCube with R32G32B32A32_SFLOAT format.
+Ref<rhi::Texture> LoadCubemapFromEquirectangular(
+    rhi::GraphicsDevice* device,
+    const HDRImageData& equirectangular,
+    uint32 faceSize = 256
+);
+
+// Compute a diffuse irradiance cubemap by integrating the equirectangular
+// environment map over the hemisphere (cosine-weighted, ~128 samples/texel).
+// faceSize: output resolution per face (default 32 — irradiance is smooth).
+// Returns a TextureCube with R32G32B32A32_SFLOAT format.
+Ref<rhi::Texture> ComputeIrradianceCubemap(
+    rhi::GraphicsDevice* device,
+    const HDRImageData& equirectangular,
+    uint32 faceSize = 32
+);
+
 } // namespace utils
 } // namespace metagfx

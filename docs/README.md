@@ -98,10 +98,12 @@ Comprehensive camera documentation (Milestones 1.4, 4.3):
 #### [Asset Loading System](asset_loading.md)
 **Topics**: 3D model loading, PBRT v4 scenes, texture loading, LOD, instanced rendering
 
-Comprehensive asset pipeline documentation (Milestones 2.1, 2.3, 4.3, 5.1):
+Comprehensive asset pipeline documentation (Milestones 2.1, 2.3, 4.3, 5.1, 5.2):
 - Texture loading pipeline (stb_image → CPU → GPU) with fallback textures
 - Assimp model loading: supported formats (OBJ, FBX, glTF, COLLADA), post-processing, material extraction
 - **PBRT v4 scene loading** — lexer, parser, loader; trianglemesh + plymesh shapes; all material types; conductor spectral data → RGB F0; lights and camera extraction
+- **PBRT v4 advanced features** — normal/roughness/metallic texture maps; mix + measured material fallbacks; scale texture passthrough; sphere + disk procedural shapes; ObjectBegin/End/Instance instancing; spot lights; infinite lights (PFM HDR env maps)
+- **HDR environment map loading** — PFM loader, equirectangular-to-cubemap conversion, irradiance cubemap computation (Fibonacci Monte Carlo), float16 output for WebGPU compatibility
 - Mesh and Model class architecture; vertex layout; per-mesh material buffers and texture flags
 - **Level of Detail (LOD)** — meshoptimizer, 3 levels, distance-based selection
 - **Instanced Rendering** — per-instance mat4, vertex buffer slot 1, N×N grid, per-frame CPU culling
@@ -333,19 +335,19 @@ cd bin
 ```
 
 ### Project Status
-**Current Milestone**: 5.1 (Basic PBRT Parser) ✅ Complete
+**Current Milestone**: 5.2 (Advanced PBRT Features) ✅ Complete
 **Implemented Features**:
 - ✅ **Vulkan backend** (Windows, Linux, macOS)
 - ✅ **Metal backend** (macOS, iOS-ready)
 - ✅ **WebGPU backend** (Windows, macOS, Linux, Web)
 - ✅ Camera system with FPS controls, orbital mode, and automatic model framing
-- ✅ **Frustum culling** — per-model and per-instance CPU sphere tests - **NEW**
+- ✅ **Frustum culling** — per-model and per-instance CPU sphere tests
 - ✅ Model loading (OBJ, FBX, glTF, COLLADA)
 - ✅ Runtime model switching with deferred deletion
 - ✅ Procedural geometry (cube, sphere, ground plane)
-- ✅ **Level of Detail (LOD)** — 3 levels via meshoptimizer, distance-based selection - **NEW**
-- ✅ **Instanced rendering** — N×N grid, per-instance mat4, single draw call - **NEW**
-- ✅ **Performance metrics** — frame time, draw calls, triangles, culled count - **NEW**
+- ✅ **Level of Detail (LOD)** — 3 levels via meshoptimizer, distance-based selection
+- ✅ **Instanced rendering** — N×N grid, per-instance mat4, single draw call
+- ✅ **Performance metrics** — frame time, draw calls, triangles, culled count
 - ✅ Material system (albedo, roughness, metallic, AO, emissive)
 - ✅ PBR rendering with Cook-Torrance BRDF
 - ✅ Image-Based Lighting (IBL) with environment maps
@@ -356,9 +358,12 @@ cd bin
 - ✅ Shadow mapping with PCF filtering
 - ✅ Skybox rendering with LOD control (cubemap, all 6 faces)
 - ✅ ImGui integration (Vulkan + Metal + WebGPU backends)
+- ✅ **PBRT v4 basic parser** — trianglemesh, plymesh, all material types, lights, camera
+- ✅ **PBRT v4 advanced features** — normal/roughness/metallic maps, mix material, scale texture, sphere/disk shapes, ObjectBegin/End/Instance, spot lights, infinite lights (HDR env maps), TransformBegin/End
+- ✅ **HDR environment map pipeline** — PFM loader, equirectangular→cubemap (R16F), irradiance cubemap (Fibonacci Monte Carlo, R16F)
 
 **Next Milestones**:
-- 5.2: Advanced PBRT Features (instancing, infinite lights, procedural textures)
+- 6.1: Ray Tracing Foundations (BVH, ray-AABB/triangle intersection)
 - 8.1: Direct3D 12 Implementation (Windows) - Postponed to Phase 8
 
 ### Key Files
@@ -406,6 +411,7 @@ Future documentation needs:
 - [x] PBR rendering guide ✅ Complete (Milestone 3.2)
 - [x] Shadow mapping guide ✅ Complete (Milestone 3.3)
 - [x] PBRT scene parser guide ✅ Complete (Milestone 5.1, merged into asset_loading.md)
+- [x] PBRT advanced features guide ✅ Complete (Milestone 5.2, merged into asset_loading.md)
 - [ ] Testing strategy and framework
 
 ---

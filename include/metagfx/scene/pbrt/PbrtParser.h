@@ -52,6 +52,8 @@ struct PbrtParseResult {
     std::vector<PbrtMesh>               meshes;
     PbrtCameraParams                    camera;
     std::vector<std::unique_ptr<Light>> lights;
+    std::string                         envMapPath;   ///< Path to env map from LightSource "infinite" (empty if none)
+    float                               envMapScale = 1.0f;
 };
 
 // ── Parser ────────────────────────────────────────────────────────────────────
@@ -59,22 +61,29 @@ struct PbrtParseResult {
 /**
  * @brief Recursive-descent parser for PBRT v4 scene files.
  *
- * Supported features (Milestone 5.1):
+ * Supported features (Milestone 5.2):
  *  - LookAt / Camera "perspective"
  *  - WorldBegin / WorldEnd
  *  - AttributeBegin/End + brace {} blocks
  *  - Transform / Translate / Rotate / Scale / ConcatTransform / Identity
  *  - Material / MakeNamedMaterial / NamedMaterial
- *  - Texture "name" "spectrum" "imagemap" (albedo only)
- *  - Shape "trianglemesh" + Shape "plymesh"
- *  - LightSource "distant" + LightSource "point"
+ *  - Texture "name" "spectrum"|"float" "imagemap" (albedo, normal, roughness, metallic)
+ *  - Texture "name" "float"|"spectrum" "scale" (pass-through for color; skip for float/bump)
+ *  - Shape "trianglemesh" + Shape "plymesh" + Shape "sphere" + Shape "disk"
+ *  - LightSource "distant" + LightSource "point" + LightSource "spot" + LightSource "infinite"
+ *  - AreaLightSource "diffuse" (emissive proxy point lights)
+ *  - ObjectBegin / ObjectEnd / ObjectInstance (geometry instancing)
  *  - Include (recursive file inclusion)
+ *
+ * Material types (Milestone 5.2):
+ *  - diffuse, coateddiffuse, conductor, coatedconductor, dielectric, mirror
+ *  - mix (proper lerp of two named materials)
+ *  - measured (approximated as white coateddiffuse)
  *
  * Unsupported (silently skipped):
  *  - Film, Sampler, Integrator, Accelerator
- *  - LightSource "infinite", "spot", "area"
- *  - AreaLightSource
- *  - ObjectBegin / ObjectEnd / ObjectInstance
+ *  - LightSource "infinite" mapname loaded (path stored in PbrtParseResult.envMapPath)
+ *  - AreaLightSource "goniometric", "laser"
  */
 class PbrtParser {
 public:
@@ -116,7 +125,13 @@ private:
 
     // Named materials/textures are global (not scoped to attribute blocks)
     std::map<std::string, Material>           m_NamedMaterials;
-    std::map<std::string, Ref<rhi::Texture>>  m_NamedTextures;
+    std::map<std::string, Ref<rhi::Texture>>  m_NamedTextures;  // all GPU textures (color + float)
+
+    // Object instancing state
+    std::map<std::string, std::vector<PbrtMesh>> m_NamedObjects;
+    bool                   m_InsideObject = false;
+    std::string            m_CurrentObjectName;
+    std::vector<PbrtMesh>  m_ObjectBuffer;
 
     GraphicsState              m_State;
     std::vector<GraphicsState> m_StateStack;
@@ -137,6 +152,11 @@ private:
 
     void BuildTriangleMesh(const ParamMap& params);
     void BuildPlyMesh(const ParamMap& params);
+    void BuildSphere(const ParamMap& params);
+    void BuildDisk(const ParamMap& params);
+
+    /// Routes a completed mesh to m_Result.meshes or m_ObjectBuffer depending on instancing state.
+    void EmitMesh(PbrtMesh mesh);
 
     Material BuildMaterial(const std::string& typeStr, const ParamMap& params);
 

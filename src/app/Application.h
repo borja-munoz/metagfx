@@ -201,6 +201,7 @@ private:
     std::vector<glm::mat4>   m_InstanceTransforms;        // CPU-side full set of instance transforms
 
     void CreateInstanceBuffer();  // Create / recreate the instance buffer
+    void RecreateSkyboxDescriptorSets();  // Rebuild skybox desc sets after m_EnvironmentMap changes
 
     // ── Feature 4: Performance metrics ─────────────────────────────────────
     struct FrameMetrics {

@@ -39,4 +39,5 @@ assets/*.exr
 assets/*.hdr
 assets/models/*.obj
 assets/models/*.fbx
+assets/scenes/classroom
 assets/scenes/contemporary-bathroom

@@ -1,6 +1,6 @@
 # Asset Loading System
 
-**Status**: ✅ Implemented (Milestones 2.1, 2.3, 4.3, 5.1)
+**Status**: ✅ Implemented (Milestones 2.1, 2.3, 4.3, 5.1, 5.2)
 **Last Updated**: February 2026
 
 This document covers all asset loading in MetaGFX: 3D models via Assimp, PBRT v4 scene
@@ -18,6 +18,7 @@ files via the built-in parser, and image textures via stb_image.
 8. [Instanced Rendering](#instanced-rendering)
 9. [Bounding Volumes](#bounding-volumes)
 10. [Error Handling and Fallbacks](#error-handling-and-fallbacks)
+11. [HDR Environment Map Loading (TextureUtils)](#hdr-environment-map-loading-textureutils)
 
 ---
 
@@ -300,18 +301,28 @@ pops back to the parent file transparently.
 |-----------|--------|
 | `AttributeBegin` / `{` | Push graphics state copy |
 | `AttributeEnd` / `}` | Pop graphics state |
+| `TransformBegin` | Push graphics state (transform scope only) |
+| `TransformEnd` | Pop graphics state |
 | Transform directives | Update CTM |
 | `Material "type" [params]` | Build material, store in active state |
 | `MakeNamedMaterial "name" [params]` | Build material, store in global map |
 | `NamedMaterial "name"` | `state.material = m_NamedMaterials[name]` |
-| `Texture "name" "spectrum" "imagemap" [params]` | Load image → `m_NamedTextures[name]` |
+| `Texture "name" "spectrum"/"rgb" "imagemap" [params]` | Load colour image → `m_NamedTextures` |
+| `Texture "name" "float" "imagemap" [params]` | Load greyscale image → `m_NamedFloatTextures` |
+| `Texture "name" "..." "scale" [params]` | Pass-through: alias to base texture (float scale textures skipped) |
 | `Shape "trianglemesh"` | Build inline triangle mesh |
 | `Shape "plymesh"` | Load external `.ply` via Assimp |
+| `Shape "sphere"` | Generate UV sphere triangle mesh |
+| `Shape "disk"` | Generate circular fan triangle mesh |
 | `LightSource "distant"` | Add `DirectionalLight` to result |
 | `LightSource "point"` | Add `PointLight` to result |
+| `LightSource "spot"` | Add `SpotLight` to result |
+| `LightSource "infinite"` | Record environment map path for IBL setup |
 | `AreaLightSource "diffuse"` | Extract emission colour, used for emissive meshes |
 | `ReverseOrientation` | Flip normal winding in state |
-| `ObjectBegin/End/Instance` | Skipped (Milestone 5.2) |
+| `ObjectBegin "name"` | Begin object definition (push state, buffer meshes) |
+| `ObjectEnd` | End object definition (store buffered meshes by name) |
+| `ObjectInstance "name"` | Clone stored meshes with current CTM into scene |
 | `WorldEnd` | Finish parsing |
 
 ### Shape loading
@@ -356,26 +367,43 @@ file with the same post-processing flags as regular models (`Triangulate`,
 
 ### Texture loading (PBRT)
 
-```
-Texture "name" "spectrum" "imagemap"
-    "string filename" [ "textures/albedo.png" ]
-```
+The parser maintains three separate named-texture maps:
 
-Only `"imagemap"` textures are supported in Milestone 5.1. The image is loaded using
-`TextureUtils::LoadImage` / `CreateTextureFromImage` (same pipeline as Assimp textures).
-The resulting `Ref<rhi::Texture>` is stored in `m_NamedTextures["name"]`.
-
-Material definitions then reference textures by name:
+| Map | Content | Created from |
+|-----|---------|-------------|
+| `m_NamedTextures` | `Ref<rhi::Texture>` colour/albedo textures | `"spectrum"` or `"rgb"` imagemap |
+| `m_NamedFloatTextures` | `Ref<rhi::Texture>` greyscale textures | `"float"` imagemap (roughness, metallic) |
 
 ```
+# Colour texture (albedo / reflectance)
 Texture "floor-kd" "spectrum" "imagemap"
     "string filename" [ "textures/floor.png" ]
+
+# Float texture (roughness channel)
+Texture "floor-rough" "float" "imagemap"
+    "string filename" [ "textures/floor_roughness.png" ]
+
+# Scale passthrough (ignores scale factor; aliases to base texture)
+Texture "floor-bump-scaled" "float" "scale"
+    "float scale" [ 0.05 ]
+    "texture tex" [ "floor-bump-base" ]
 
 MakeNamedMaterial "floor"
     "string type" [ "coateddiffuse" ]
     "texture reflectance" [ "floor-kd" ]
-    "float roughness" [ 0.010408 ]
+    "texture roughness"   [ "floor-rough" ]
+    "float roughness"     [ 0.010408 ]
 ```
+
+**Format selection**:
+- Colour textures → `R8G8B8A8_SRGB`
+- Normal map textures → `R8G8B8A8_UNORM` (linear)
+- Float (greyscale) textures → `R8G8B8A8_UNORM` (single channel packed)
+
+**`scale` texture operator**: PBRT uses `scale` to multiply two textures together (e.g.,
+for bump map intensity). The rasteriser does not render bump/displacement, so `"float"`
+scale textures are silently skipped. For `"spectrum"` or `"rgb"` scale textures the base
+texture is stored as-is (the scale factor is ignored as an approximation).
 
 ### Material types
 
@@ -387,7 +415,46 @@ MakeNamedMaterial "floor"
 | `coatedconductor` | Same as conductor | Same | 1.0 | Conductor with dielectric coat |
 | `dielectric` | White | `float roughness` | 0.0 | Glass / transparent |
 | `mirror` | White | 0.0 | 1.0 | Perfect reflector |
+| `mix` | Linear blend of `mat1`/`mat2` by `amount` | Blended | Blended | Both materials looked up in `m_NamedMaterials` |
+| `measured` | White-grey (0.9) | 0.3 | 0.0 | Proprietary BSDF approximated as coateddiffuse |
 | default | Grey 0.5 | 0.5 | 0.0 | Fallback for unknown types |
+
+#### `mix` material blending
+
+```
+Material "mix"
+    "material mat1" [ "wall_paint" ]
+    "material mat2" [ "plaster" ]
+    "float amount"  [ 0.5 ]
+```
+
+The parser looks up both named materials in `m_NamedMaterials` and linearly interpolates
+albedo, roughness, metallic, and emissive using the `amount` parameter (0 = mat1, 1 = mat2).
+If one material has an albedo texture and the other does not, the textured material takes
+precedence. If either named material is not found, the other is used unchanged.
+
+#### `measured` material fallback
+
+PBRT's `measured` BSDF type references proprietary `.bsdf` data files that are not
+publicly available. The parser approximates this as a light-grey coated diffuse
+(albedo = 0.9, roughness = 0.3) and logs an info message.
+
+#### Normal / roughness / metallic maps
+
+When a named material references float or colour textures for PBR channels, the material
+slots are populated:
+
+```
+MakeNamedMaterial "my-material"
+    "string type"         [ "coateddiffuse" ]
+    "texture reflectance" [ "my-albedo-tex" ]  # → SetAlbedoMap()
+    "texture normalmap"   [ "my-normal-tex" ]  # → SetNormalMap()
+    "texture roughness"   [ "my-rough-tex" ]   # → SetRoughnessMap()
+    "texture metallic"    [ "my-metal-tex" ]   # → SetMetallicMap()
+```
+
+Texture flags (`HasNormalMap`, `HasRoughnessMap`, `HasMetallicMap`) are set in
+`MaterialProperties::textureFlags` so the GPU shader samples the right slots.
 
 #### Conductor spectral data
 
@@ -432,7 +499,24 @@ in the real-time rasteriser.
 |-----------|--------------|----------------|
 | `distant` | `DirectionalLight` | `from`, `to` → direction; `L` → colour; `scale` → intensity |
 | `point` | `PointLight` | `from` → position; `I` → colour; `scale` → intensity |
-| `infinite` | Skipped | (Environment maps, Milestone 5.2) |
+| `spot` | `SpotLight` | `from`, `to` → position/direction; `I` → colour; `coneangle` / `conedeltaangle` → outer/inner angle |
+| `infinite` | Environment map | `string mapname` → HDR env map path stored in `PbrtParseResult::envMapPath` |
+
+#### `LightSource "infinite"` — environment map
+
+PBRT's infinite light source maps to an HDR sky environment. The parser records the path:
+
+```
+LightSource "infinite"
+    "string mapname" [ "textures/Skydome.pfm" ]
+```
+
+After parsing, `Application::LoadModel()` reads `result.envMapPath`. If the file has
+extension `.pfm`, it is loaded as an equirectangular HDR image and converted to a GPU
+cubemap for the skybox and an irradiance cubemap for IBL ambient lighting (see
+[HDR Environment Map Loading](#hdr-environment-map-loading-textureutils) below).
+The skybox is automatically shown; IBL is prepared but left off by default so that the
+scene's direct lights dominate — IBL can be enabled at any time via the ImGui panel.
 
 Lights are added directly to the `Scene` object passed to `PbrtLoader::Load()`. If a
 scene is provided, `scene->ClearLights()` is called first so PBRT-defined lights replace
@@ -454,13 +538,64 @@ Camera "perspective"
 When `camera.defined == true`, the application sets the camera perspective and position
 then sets the orbit target to the scene centre so the user can freely orbit after loading.
 
-### Unsupported features (Milestone 5.2)
+### Procedural shapes
 
-- `LightSource "infinite"` (HDR environment maps)
-- `ObjectBegin` / `ObjectEnd` / `ObjectInstance` (object instancing)
-- Procedural textures (`"checkerboard"`, `"fbm"`, etc.)
-- Spectral rendering (colours are approximated as RGB)
-- Non-imagemap texture types
+#### Sphere
+
+```
+Shape "sphere"  "float radius" [ 0.5 ]
+```
+
+A UV sphere is generated with 32 latitude × 16 longitude segments. The current CTM is
+baked into vertex positions and normals. UVs follow spherical mapping (φ/2π, θ/π).
+
+#### Disk
+
+```
+Shape "disk"  "float radius" [ 1.0 ]  "float height" [ 0.0 ]
+```
+
+A circular triangle fan with 64 sectors. The disk is centred at `(0, height, 0)` with
+the normal pointing up (+Y). The CTM is baked in.
+
+### Object instancing
+
+`ObjectBegin` / `ObjectEnd` define a named object template; `ObjectInstance` stamps copies
+into the scene at the current CTM:
+
+```
+ObjectBegin "desk-unit"
+    Shape "plymesh"  "string filename" [ "geometry/desk.ply" ]
+    Shape "plymesh"  "string filename" [ "geometry/chair.ply" ]
+ObjectEnd
+
+# Place four copies
+AttributeBegin
+    Translate  0  0  0    ObjectInstance "desk-unit"
+    Translate  3  0  0    ObjectInstance "desk-unit"
+    Translate  0  0 -3    ObjectInstance "desk-unit"
+    Translate  3  0 -3    ObjectInstance "desk-unit"
+AttributeEnd
+```
+
+The parser accumulates meshes during an `ObjectBegin` block into `m_ObjectBuffer`, then
+stores them in `m_NamedObjects[name]` on `ObjectEnd`. Each `ObjectInstance` clones the
+stored meshes and applies the current CTM to their vertices before appending to the scene.
+
+### TransformBegin / TransformEnd
+
+These scoped directives push and pop the graphics state (equivalent to `AttributeBegin` /
+`AttributeEnd`) but conventionally enclose only transform changes. They were needed to
+correctly handle scenes like the classroom, where a large floor scale transform is
+wrapped in `TransformBegin`/`TransformEnd` to prevent it from bleeding into subsequent
+mesh definitions.
+
+### Remaining limitations
+
+- Procedural textures (`"checkerboard"`, `"fbm"`, `"windy"`, etc.) — not supported
+- `Shape "loopsubdiv"` (Loop subdivision surfaces) — not supported
+- Spectral rendering — colours approximated as RGB
+- Bump mapping / displacement — parsed but not rendered in the rasteriser
 
 ---
 
@@ -751,7 +886,103 @@ if (!result.model || !result.model->IsValid()) {
 
 ---
 
-## Build Configuration
+---
+
+## HDR Environment Map Loading (TextureUtils)
+
+**Location**: `include/metagfx/utils/TextureUtils.h`, `src/utils/TextureUtils.cpp`
+
+PBRT scenes often specify environment maps as equirectangular HDR images. MetaGFX provides
+a CPU-side pipeline to convert these into GPU-ready cubemaps:
+
+```
+Equirectangular HDR image (PFM / EXR)
+        │
+        ▼
+  TextureUtils::LoadPFMImage()        ← parse PFM header, flip rows, expand RGB→RGBA
+        │
+        ▼  HDRImageData { float* pixels, width, height, channels }
+        │
+   ┌────┴────────────────────────────────┐
+   │                                     │
+   ▼                                     ▼
+LoadCubemapFromEquirectangular()    ComputeIrradianceCubemap()
+  (for skybox display)               (for IBL ambient fill)
+        │                                 │
+        ▼                                 ▼
+  R16G16B16A16_SFLOAT              R16G16B16A16_SFLOAT
+  TextureCube, 256×256/face        TextureCube, 32×32/face
+```
+
+### LoadPFMImage
+
+Loads a Portable Float Map (`.pfm`) file:
+- Parses the three-line text header: magic `"PF"` (colour), `"width height"`, scale factor
+- Reads binary RGB float32 data (PFM stores rows bottom-to-top)
+- Flips vertically and expands to RGBA (alpha = 1.0)
+- Returns `HDRImageData` with `malloc`-allocated pixels (free with `FreeHDRImage()`)
+
+Only colour PFMs (`"PF"` magic) are supported. Greyscale PFMs (`"Pf"`) are rejected with
+an error log.
+
+### LoadCubemapFromEquirectangular
+
+Converts an equirectangular HDR image to a `TextureCube` for skybox display:
+
+```cpp
+Ref<rhi::Texture> LoadCubemapFromEquirectangular(
+    rhi::GraphicsDevice* device,
+    const HDRImageData&  equirectangular,
+    uint32               faceSize = 256
+);
+```
+
+For each of the 6 cubemap faces (+X, -X, +Y, -Y, +Z, -Z), each texel's world-space
+direction is computed via `CubemapFaceDir()` (OpenGL/DDS convention), then the
+equirectangular image is sampled at the corresponding (φ, θ) with bilinear filtering
+(horizontal wraparound). Output pixels are stored as **float16** (`R16G16B16A16_SFLOAT`).
+
+Float16 is used instead of float32 because WebGPU requires the `float32-filterable`
+optional feature to sample `R32G32B32A32_SFLOAT` textures — a feature not universally
+available. Float16 is filterable on all backends without optional features.
+
+### ComputeIrradianceCubemap
+
+Computes a diffuse irradiance cubemap by integrating the equirectangular environment map
+over the hemisphere (for PBR ambient IBL):
+
+```cpp
+Ref<rhi::Texture> ComputeIrradianceCubemap(
+    rhi::GraphicsDevice* device,
+    const HDRImageData&  equirectangular,
+    uint32               faceSize = 32
+);
+```
+
+Uses cosine-weighted Monte Carlo integration with the Fibonacci spiral:
+
+```
+E(n) ≈ (π / N) × Σᵢ L(ωᵢ)   for N = 128 cosine-weighted samples per texel
+```
+
+The Fibonacci spiral distributes N samples uniformly over the hemisphere without
+clumping. The integrand is the radiance from the equirectangular environment at each
+sample direction. Output is `R16G16B16A16_SFLOAT`, 32×32 per face (irradiance is
+low-frequency; higher resolution adds no visible benefit).
+
+### IBL integration with PBRT scenes
+
+When a PBRT scene defines `LightSource "infinite"`, `Application::LoadModel()`:
+1. Calls `LoadPFMImage()` to decode the HDR file
+2. Calls `LoadCubemapFromEquirectangular()` → stored in `m_EnvironmentMap`; skybox is shown
+3. Calls `ComputeIrradianceCubemap()` → stored in `m_IrradianceMap`; IBL is prepared
+4. Recreates skybox descriptor sets via `RecreateSkyboxDescriptorSets()`
+5. Leaves `m_EnableIBL = false` — the scene's direct lights provide primary illumination;
+   IBL ambient fill can be enabled interactively via **Enable IBL** in the ImGui panel
+
+---
+
+
 
 ### CMake modules
 

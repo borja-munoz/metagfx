@@ -37,6 +37,10 @@ PbrtParseResult PbrtParser::Parse(const std::string& filepath) {
     m_StateStack.clear();
     m_NamedMaterials.clear();
     m_NamedTextures.clear();
+    m_NamedObjects.clear();
+    m_InsideObject = false;
+    m_CurrentObjectName.clear();
+    m_ObjectBuffer.clear();
 
     // Determine base directory for resolving relative paths
     std::filesystem::path p(filepath);
@@ -170,7 +174,7 @@ PbrtParser::ParamMap PbrtParser::ParseParams(PbrtLexer& lex) {
             if (ints.size() == 1)     result[pname] = ints[0];
             else if (!ints.empty())   result[pname] = ints;
 
-        } else if (ptype == "string" || ptype == "texture") {
+        } else if (ptype == "string" || ptype == "texture" || ptype == "material") {
             // Value is a quoted string (possibly inside brackets)
             std::string val;
             if (lex.Peek().type == PbrtTokenType::String) {
@@ -411,10 +415,10 @@ void PbrtParser::ParseWorldSection(PbrtLexer& lex) {
         const std::string& d = tok.value;
 
         // ── Attribute blocks ─────────────────────────────────────────────────
-        if (d == "AttributeBegin" || d == "LBrace") {
+        if (d == "AttributeBegin" || d == "LBrace" || d == "TransformBegin") {
             m_StateStack.push_back(m_State);
 
-        } else if (d == "AttributeEnd") {
+        } else if (d == "AttributeEnd" || d == "TransformEnd") {
             if (!m_StateStack.empty()) {
                 m_State = m_StateStack.back();
                 m_StateStack.pop_back();
@@ -532,13 +536,60 @@ void PbrtParser::ParseWorldSection(PbrtLexer& lex) {
             std::string incPath = (std::filesystem::path(m_BaseDir) / incFile).string();
             lex.PushFile(incPath);
 
+        // ── Object instancing ─────────────────────────────────────────────────
+        } else if (d == "ObjectBegin") {
+            std::string name;
+            if (lex.Peek().type == PbrtTokenType::String) name = lex.Next().value;
+            m_StateStack.push_back(m_State);
+            m_InsideObject = true;
+            m_CurrentObjectName = name;
+            m_ObjectBuffer.clear();
+            METAGFX_DEBUG << "PbrtParser: ObjectBegin '" << name << "'";
+
+        } else if (d == "ObjectEnd") {
+            m_NamedObjects[m_CurrentObjectName] = std::move(m_ObjectBuffer);
+            m_ObjectBuffer.clear();
+            m_InsideObject = false;
+            if (!m_StateStack.empty()) {
+                m_State = m_StateStack.back();
+                m_StateStack.pop_back();
+            }
+            METAGFX_DEBUG << "PbrtParser: ObjectEnd '" << m_CurrentObjectName
+                          << "' (" << m_NamedObjects[m_CurrentObjectName].size() << " meshes)";
+
+        } else if (d == "ObjectInstance") {
+            std::string name;
+            if (lex.Peek().type == PbrtTokenType::String) name = lex.Next().value;
+            auto it = m_NamedObjects.find(name);
+            if (it != m_NamedObjects.end()) {
+                const glm::mat4& M   = m_State.ctm;
+                const glm::mat3  Mnv = glm::transpose(glm::inverse(glm::mat3(M)));
+                for (const PbrtMesh& src : it->second) {
+                    PbrtMesh copy;
+                    copy.material = src.material;
+                    copy.indices  = src.indices;
+                    copy.vertices.reserve(src.vertices.size());
+                    for (const Vertex& v : src.vertices) {
+                        Vertex nv   = v;
+                        nv.position = glm::vec3(M * glm::vec4(v.position, 1.0f));
+                        nv.normal   = glm::normalize(Mnv * v.normal);
+                        copy.vertices.push_back(nv);
+                    }
+                    m_Result.meshes.push_back(std::move(copy));
+                }
+                METAGFX_DEBUG << "PbrtParser: ObjectInstance '" << name
+                              << "' → " << it->second.size() << " meshes";
+            } else {
+                METAGFX_WARN << "PbrtParser: unknown ObjectInstance '" << name << "'";
+            }
+
         // ── WorldEnd ─────────────────────────────────────────────────────────
         } else if (d == "WorldEnd") {
             return;
 
         // ── Skip unrecognised directives ─────────────────────────────────────
         } else {
-            // ObjectBegin/End/Instance, MediumInterface, etc. — read type + params
+            // MediumInterface, CoordSysTransform, etc. — read type + params
             if (lex.Peek().type == PbrtTokenType::String) lex.Next();
             ParseParams(lex);
         }
@@ -609,51 +660,8 @@ Material PbrtParser::BuildMaterial(const std::string& typeStr, const ParamMap& p
     float     roughness = 0.5f;
     float     metallic  = 0.0f;
 
-    auto getReflectance = [&]() {
-        // Check texture reference first
-        auto it = params.find("reflectance");
-        if (it != params.end()) {
-            if (auto* s = std::get_if<std::string>(&it->second)) {
-                // Texture reference — look up in named textures
-                auto texIt = m_NamedTextures.find(*s);
-                if (texIt != m_NamedTextures.end()) {
-                    Material mat(albedo, roughness, metallic);
-                    mat.SetAlbedoMap(texIt->second);
-                    return mat;
-                }
-            }
-        }
-        // RGB / float color
-        return Material(albedo, roughness, metallic);  // placeholder, will override below
-    };
-    (void)getReflectance;  // used inline below
-
     if (typeStr == "diffuse" || typeStr == "coateddiffuse") {
-        // Check for texture reference
-        auto reflIt = params.find("reflectance");
-        if (reflIt != params.end()) {
-            if (auto* s = std::get_if<std::string>(&reflIt->second)) {
-                auto texIt = m_NamedTextures.find(*s);
-                if (texIt != m_NamedTextures.end()) {
-                    albedo = glm::vec3(1.0f);
-                    roughness = GetFloat(params, "roughness",
-                                    (GetFloat(params, "uroughness", -1.0f) >= 0.0f)
-                                        ? (GetFloat(params, "uroughness", 0.5f) +
-                                           GetFloat(params, "vroughness", 0.5f)) * 0.5f
-                                        : 0.5f);
-                    Material mat(albedo, roughness, metallic);
-                    mat.SetAlbedoMap(texIt->second);
-                    METAGFX_DEBUG << "PbrtParser: material '" << typeStr
-                                 << "' using texture '" << *s
-                                 << "' (hasAlbedo=" << mat.HasAlbedoMap() << ")";
-                    return mat;
-                } else {
-                    METAGFX_WARN << "PbrtParser: texture '" << *s
-                                 << "' referenced but not found in named textures ("
-                                 << m_NamedTextures.size() << " textures loaded)";
-                }
-            }
-        }
+        // GetVec3 returns default when reflectance is a texture ref (string) — handled below
         albedo    = GetVec3(params, "reflectance", glm::vec3(0.5f));
         roughness = (typeStr == "coateddiffuse")
                         ? GetFloat(params, "roughness", 0.5f)
@@ -661,11 +669,7 @@ Material PbrtParser::BuildMaterial(const std::string& typeStr, const ParamMap& p
         metallic  = 0.0f;
 
     } else if (typeStr == "conductor" || typeStr == "coatedconductor") {
-        // Derive albedo from spectral metal data (eta/k → Fresnel F0 at normal incidence)
-        // For metallic=1 in our PBR shader, albedo IS the F0 reflectance.
         albedo = ConductorAlbedoFromParams(params);
-
-        // Parse roughness: isotropic "roughness" first, then anisotropic u/v
         float isoRough = GetFloat(params, "roughness", -1.0f);
         if (isoRough >= 0.0f) {
             roughness = isoRough;
@@ -674,12 +678,7 @@ Material PbrtParser::BuildMaterial(const std::string& typeStr, const ParamMap& p
             float vr = GetFloat(params, "vroughness", ur);
             roughness = (ur + vr) * 0.5f;
         }
-
-        // Real-time rendering minimum: near-zero roughness produces black
-        // surfaces without ray-traced reflections.  Clamp to a small value
-        // so that direct lights still produce visible specular highlights.
         roughness = std::max(roughness, 0.02f);
-
         metallic  = 1.0f;
 
     } else if (typeStr == "dielectric") {
@@ -700,17 +699,95 @@ Material PbrtParser::BuildMaterial(const std::string& typeStr, const ParamMap& p
         metallic  = 1.0f;
 
     } else if (typeStr == "mix") {
-        // Simplified: treat as diffuse grey
-        albedo    = glm::vec3(0.5f);
-        roughness = 0.5f;
+        // Blend two named materials by 'amount' (PBRT v4: namedmaterial1/namedmaterial2)
+        std::string n1 = GetString(params, "namedmaterial1",
+                                   GetString(params, "mat1", ""));
+        std::string n2 = GetString(params, "namedmaterial2",
+                                   GetString(params, "mat2", ""));
+        float amount = GetFloat(params, "amount", 0.5f);
+        amount = glm::clamp(amount, 0.0f, 1.0f);
+
+        auto it1 = m_NamedMaterials.find(n1);
+        auto it2 = m_NamedMaterials.find(n2);
+
+        if (it1 != m_NamedMaterials.end() && it2 != m_NamedMaterials.end()) {
+            const Material& m1 = it1->second;
+            const Material& m2 = it2->second;
+            albedo    = glm::mix(m1.GetAlbedo(),     m2.GetAlbedo(),     amount);
+            roughness = glm::mix(m1.GetRoughness(),  m2.GetRoughness(),  amount);
+            metallic  = glm::mix(m1.GetMetallic(),   m2.GetMetallic(),   amount);
+            Material mat(albedo, roughness, metallic);
+            // Prefer the textured material's albedo map
+            if (m1.HasAlbedoMap())      mat.SetAlbedoMap(m1.GetAlbedoMap());
+            else if (m2.HasAlbedoMap()) mat.SetAlbedoMap(m2.GetAlbedoMap());
+            return mat;
+        } else if (it1 != m_NamedMaterials.end()) {
+            return it1->second;
+        } else if (it2 != m_NamedMaterials.end()) {
+            return it2->second;
+        }
+        // fallback: grey diffuse
+        METAGFX_DEBUG << "PbrtParser: mix material '" << n1 << "'/'" << n2
+                      << "' not found in named materials, using grey diffuse";
+        albedo = glm::vec3(0.5f); roughness = 0.5f; metallic = 0.0f;
+
+    } else if (typeStr == "measured") {
+        // Proprietary BSDF — approximate as white satin-like diffuse
+        albedo    = glm::vec3(0.85f, 0.85f, 0.85f);
+        roughness = 0.3f;
         metallic  = 0.0f;
+        METAGFX_DEBUG << "PbrtParser: 'measured' material approximated as white coateddiffuse";
 
     } else {
         METAGFX_WARN << "PbrtParser: unknown material type '" << typeStr
                      << "', using default";
     }
 
-    return Material(albedo, roughness, metallic);
+    Material mat(albedo, roughness, metallic);
+
+    // ── Texture map application ───────────────────────────────────────────────
+    // Albedo: reflectance may be a texture reference (stored as string in params)
+    std::string reflTexName = GetString(params, "reflectance", "");
+    if (!reflTexName.empty()) {
+        auto it = m_NamedTextures.find(reflTexName);
+        if (it != m_NamedTextures.end()) {
+            mat.SetAlbedoMap(it->second);
+            METAGFX_DEBUG << "PbrtParser: material '" << typeStr
+                          << "' albedo texture '" << reflTexName << "'";
+        } else {
+            METAGFX_WARN << "PbrtParser: texture '" << reflTexName
+                         << "' referenced but not found ("
+                         << m_NamedTextures.size() << " textures loaded)";
+        }
+    }
+
+    // Normal map
+    std::string normTexName = GetString(params, "normalmap", "");
+    if (!normTexName.empty()) {
+        auto it = m_NamedTextures.find(normTexName);
+        if (it != m_NamedTextures.end())
+            mat.SetNormalMap(it->second);
+        else
+            METAGFX_DEBUG << "PbrtParser: normalmap texture '" << normTexName << "' not found";
+    }
+
+    // Roughness map (only activated when roughness param is a texture name, not a float)
+    std::string roughTexName = GetString(params, "roughness", "");
+    if (!roughTexName.empty()) {
+        auto it = m_NamedTextures.find(roughTexName);
+        if (it != m_NamedTextures.end())
+            mat.SetRoughnessMap(it->second);
+    }
+
+    // Metallic map
+    std::string metalTexName = GetString(params, "metallic", "");
+    if (!metalTexName.empty()) {
+        auto it = m_NamedTextures.find(metalTexName);
+        if (it != m_NamedTextures.end())
+            mat.SetMetallicMap(it->second);
+    }
+
+    return mat;
 }
 
 void PbrtParser::HandleMaterial(const std::string& typeStr, const ParamMap& params) {
@@ -739,7 +816,39 @@ void PbrtParser::HandleTexture(PbrtLexer& lex) {
 
     ParamMap params = ParseParams(lex);
 
-    if (texClass != "imagemap") return;  // Only imagemap in 5.1
+    // ── scale texture operator ────────────────────────────────────────────────
+    if (texClass == "scale") {
+        if (texChannel == "float") {
+            // Float scale textures are bump/displacement maps — not supported in rasterizer
+            METAGFX_DEBUG << "PbrtParser: skipping float scale texture '" << texName
+                          << "' (bump mapping not supported in rasterizer)";
+            return;
+        }
+        // Spectrum/RGB scale: pass the base texture through under the new name
+        // (ignore the numeric scale factor — approximation)
+        std::string baseName = GetString(params, "tex",
+                               GetString(params, "tex1",
+                               GetString(params, "tex2", "")));
+        if (!baseName.empty()) {
+            auto it = m_NamedTextures.find(baseName);
+            if (it != m_NamedTextures.end()) {
+                m_NamedTextures[texName] = it->second;
+                METAGFX_DEBUG << "PbrtParser: scale texture '" << texName
+                              << "' → pass-through from '" << baseName << "'";
+            } else {
+                METAGFX_DEBUG << "PbrtParser: scale texture '" << texName
+                              << "': base '" << baseName << "' not yet loaded, skipping";
+            }
+        }
+        return;
+    }
+
+    // ── imagemap ──────────────────────────────────────────────────────────────
+    if (texClass != "imagemap") {
+        METAGFX_DEBUG << "PbrtParser: skipping texture class '" << texClass
+                      << "' (only imagemap and scale supported)";
+        return;
+    }
 
     std::string filename = GetString(params, "filename", "");
     if (filename.empty()) return;
@@ -752,14 +861,19 @@ void PbrtParser::HandleTexture(PbrtLexer& lex) {
         return;
     }
 
-    // Use SRGB for albedo/spectrum textures, UNORM for others
-    rhi::Format fmt = rhi::Format::R8G8B8A8_SRGB;
+    // "float" channel → UNORM (linear scalar data: roughness, metallic, AO, bump)
+    // "spectrum"/"rgb" channel → SRGB (colour data with gamma correction)
+    rhi::Format fmt = (texChannel == "float")
+                          ? rhi::Format::R8G8B8A8_UNORM
+                          : rhi::Format::R8G8B8A8_SRGB;
+
     auto tex = utils::CreateTextureFromImage(m_Device, img, fmt);
     utils::FreeImage(img);
 
     if (tex) {
         m_NamedTextures[texName] = tex;
-        METAGFX_INFO << "PbrtParser: loaded texture '" << texName << "' from " << filename;
+        METAGFX_INFO << "PbrtParser: loaded texture '" << texName << "' from " << filename
+                     << " (channel=" << texChannel << ")";
     }
 }
 
@@ -773,8 +887,12 @@ void PbrtParser::HandleShape(PbrtLexer& /*lex*/, const std::string& typeStr,
         BuildTriangleMesh(params);
     } else if (typeStr == "plymesh") {
         BuildPlyMesh(params);
+    } else if (typeStr == "sphere") {
+        BuildSphere(params);
+    } else if (typeStr == "disk") {
+        BuildDisk(params);
     } else {
-        METAGFX_WARN << "PbrtParser: unsupported shape type: '" << typeStr << "'";
+        METAGFX_DEBUG << "PbrtParser: skipping unsupported shape type: '" << typeStr << "'";
     }
 }
 
@@ -922,7 +1040,7 @@ void PbrtParser::BuildTriangleMesh(const ParamMap& params) {
         m_Result.lights.push_back(std::move(light));
     }
 
-    m_Result.meshes.push_back(std::move(mesh));
+    EmitMesh(std::move(mesh));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1021,7 +1139,121 @@ void PbrtParser::BuildPlyMesh(const ParamMap& params) {
         m_Result.lights.push_back(std::move(light));
     }
 
-    m_Result.meshes.push_back(std::move(mesh));
+    EmitMesh(std::move(mesh));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// EmitMesh helper
+// ─────────────────────────────────────────────────────────────────────────────
+
+void PbrtParser::EmitMesh(PbrtMesh mesh) {
+    if (m_InsideObject) {
+        m_ObjectBuffer.push_back(std::move(mesh));
+    } else {
+        m_Result.meshes.push_back(std::move(mesh));
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Sphere shape
+// ─────────────────────────────────────────────────────────────────────────────
+
+void PbrtParser::BuildSphere(const ParamMap& params) {
+    float radius = GetFloat(params, "radius", 1.0f);
+
+    const uint32_t rings    = 16;
+    const uint32_t segments = 32;
+
+    const glm::mat4& M   = m_State.ctm;
+    const glm::mat3  Mnv = glm::transpose(glm::inverse(glm::mat3(M)));
+
+    std::vector<Vertex> vertices;
+    std::vector<uint32_t> indices;
+
+    for (uint32_t y = 0; y <= rings; ++y) {
+        float phi = glm::pi<float>() * static_cast<float>(y) / static_cast<float>(rings);
+        for (uint32_t x = 0; x <= segments; ++x) {
+            float theta = 2.0f * glm::pi<float>() * static_cast<float>(x) / static_cast<float>(segments);
+            Vertex v;
+            glm::vec3 local(radius * std::sin(phi) * std::cos(theta),
+                             radius * std::cos(phi),
+                             radius * std::sin(phi) * std::sin(theta));
+            v.position = glm::vec3(M * glm::vec4(local, 1.0f));
+            v.normal   = glm::normalize(Mnv * glm::normalize(local));
+            v.texCoord = glm::vec2(static_cast<float>(x) / segments,
+                                   static_cast<float>(y) / rings);
+            vertices.push_back(v);
+        }
+    }
+
+    for (uint32_t y = 0; y < rings; ++y) {
+        for (uint32_t x = 0; x < segments; ++x) {
+            uint32_t c = y * (segments + 1) + x;
+            uint32_t n = c + segments + 1;
+            indices.push_back(c);     indices.push_back(n);     indices.push_back(c + 1);
+            indices.push_back(c + 1); indices.push_back(n);     indices.push_back(n + 1);
+        }
+    }
+
+    PbrtMesh mesh;
+    mesh.vertices = std::move(vertices);
+    mesh.indices  = std::move(indices);
+    mesh.material = m_State.hasMaterial ? m_State.material : Material{};
+    EmitMesh(std::move(mesh));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Disk shape
+// ─────────────────────────────────────────────────────────────────────────────
+
+void PbrtParser::BuildDisk(const ParamMap& params) {
+    float radius = GetFloat(params, "radius", 1.0f);
+    float height = GetFloat(params, "height", 0.0f);
+
+    const uint32_t segments = 32;
+
+    const glm::mat4& M   = m_State.ctm;
+    const glm::mat3  Mnv = glm::transpose(glm::inverse(glm::mat3(M)));
+
+    // PBRT disk faces +Z; transform the local normal
+    glm::vec3 localNormal(0.0f, 0.0f, 1.0f);
+    glm::vec3 worldNormal = glm::normalize(Mnv * localNormal);
+
+    std::vector<Vertex> vertices;
+    std::vector<uint32_t> indices;
+
+    // Center vertex
+    {
+        Vertex c;
+        c.position = glm::vec3(M * glm::vec4(0.0f, 0.0f, height, 1.0f));
+        c.normal   = worldNormal;
+        c.texCoord = glm::vec2(0.5f, 0.5f);
+        vertices.push_back(c);
+    }
+
+    for (uint32_t i = 0; i <= segments; ++i) {
+        float angle = 2.0f * glm::pi<float>() * static_cast<float>(i) / segments;
+        float cx = radius * std::cos(angle);
+        float cy = radius * std::sin(angle);
+        Vertex v;
+        v.position = glm::vec3(M * glm::vec4(cx, cy, height, 1.0f));
+        v.normal   = worldNormal;
+        v.texCoord = glm::vec2(cx / (2.0f * radius) + 0.5f,
+                               cy / (2.0f * radius) + 0.5f);
+        vertices.push_back(v);
+    }
+
+    for (uint32_t i = 0; i < segments; ++i) {
+        indices.push_back(0);
+        indices.push_back(i + 1);
+        indices.push_back(i + 2);
+    }
+
+    PbrtMesh mesh;
+    mesh.vertices = std::move(vertices);
+    mesh.indices  = std::move(indices);
+    mesh.material = m_State.hasMaterial ? m_State.material : Material{};
+    EmitMesh(std::move(mesh));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1054,10 +1286,40 @@ void PbrtParser::HandleLightSource(const std::string& typeStr, const ParamMap& p
         auto light = std::make_unique<PointLight>(from, range, color, intensity);
         m_Result.lights.push_back(std::move(light));
 
+    } else if (typeStr == "spot") {
+        glm::vec3 from      = GetVec3(params, "from",  glm::vec3(0.0f));
+        glm::vec3 to        = GetVec3(params, "to",    glm::vec3(0.0f, 0.0f, 1.0f));
+        glm::vec3 color     = GetVec3(params, "I",     glm::vec3(1.0f));
+        float     scale     = GetFloat(params, "scale", 1.0f);
+        float     coneAngle = GetFloat(params, "coneangle",      30.0f);   // degrees
+        float     coneDelta = GetFloat(params, "conedeltaangle",  5.0f);   // degrees
+
+        float intensity  = scale * 0.001f;
+        float outerAngle = coneAngle;
+        float innerAngle = coneAngle - coneDelta;
+
+        glm::vec3 dir = to - from;
+        dir = (glm::length(dir) > 1e-6f) ? glm::normalize(dir) : glm::vec3(0.0f, -1.0f, 0.0f);
+
+        auto light = std::make_unique<SpotLight>(from, dir, innerAngle, outerAngle,
+                                                  500.0f, color, intensity);
+        m_Result.lights.push_back(std::move(light));
+
     } else if (typeStr == "infinite") {
-        // IBL handled via existing environment map mechanism — skip
+        // Environment / IBL light — store the map path for the caller to use
+        std::string mapFile = GetString(params, "mapname",
+                              GetString(params, "filename", ""));
+        float scale = GetFloat(params, "scale", 1.0f);
+        if (!mapFile.empty()) {
+            m_Result.envMapPath  = (std::filesystem::path(m_BaseDir) / mapFile).string();
+            m_Result.envMapScale = scale;
+            METAGFX_INFO << "PbrtParser: infinite light → env map: " << m_Result.envMapPath;
+        } else {
+            METAGFX_DEBUG << "PbrtParser: infinite light has no mapname, skipping";
+        }
+
     } else {
-        METAGFX_WARN << "PbrtParser: unsupported light type: '" << typeStr << "'";
+        METAGFX_DEBUG << "PbrtParser: skipping unsupported light type: '" << typeStr << "'";
     }
 }
 

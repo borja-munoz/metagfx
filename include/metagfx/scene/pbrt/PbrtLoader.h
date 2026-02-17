@@ -18,8 +18,10 @@ namespace rhi { class GraphicsDevice; }
  * @brief Result returned by PbrtLoader::Load().
  */
 struct PbrtLoadResult {
-    std::unique_ptr<Model> model;   ///< All PBRT meshes assembled into one Model
-    PbrtCameraParams       camera;  ///< Camera params (check camera.defined before using)
+    std::unique_ptr<Model> model;        ///< All PBRT meshes assembled into one Model
+    PbrtCameraParams       camera;       ///< Camera params (check camera.defined before using)
+    std::string            envMapPath;   ///< Path to environment map (from LightSource "infinite"), empty if none
+    float                  envMapScale = 1.0f;
 };
 
 /**

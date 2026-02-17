@@ -35,6 +35,8 @@
 #include "metagfx/scene/pbrt/PbrtLoader.h"
 #include "metagfx/utils/TextureUtils.h"
 #include <SDL3/SDL.h>
+#include <cctype>
+#include <filesystem>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <imgui.h>
@@ -122,7 +124,9 @@ void Application::Init() {
         "/Users/Borja/dev/borja-munoz/metagfx/assets/models/MetalRoughSpheres.glb",
         "/Users/Borja/dev/borja-munoz/metagfx/assets/scenes/cornell-box.pbrt",
         "/Users/Borja/dev/borja-munoz/metagfx/assets/scenes/cornell-box/scene-v4.pbrt",
-        "/Users/Borja/dev/borja-munoz/metagfx/assets/scenes/contemporary-bathroom/contemporary-bathroom.pbrt"
+        "/Users/Borja/dev/borja-munoz/metagfx/assets/scenes/contemporary-bathroom/contemporary-bathroom.pbrt",
+        "/Users/Borja/dev/borja-munoz/metagfx/assets/scenes/milestone52-test.pbrt",
+        "/Users/Borja/dev/borja-munoz/metagfx/assets/scenes/classroom/scene-v4.pbrt"
     };
     m_CurrentModelIndex = 4;  // Default: Cornell Box
 
@@ -588,6 +592,48 @@ void Application::LoadModel(const std::string& path) {
         m_ShowGroundPlane = false;
         m_ShowSkybox      = false;
 
+        // If the PBRT scene specifies an environment map via LightSource "infinite",
+        // load it as a skybox cubemap (PFM equirectangular supported).
+        if (!result.envMapPath.empty()) {
+            METAGFX_INFO << "PBRT scene specifies environment map: " << result.envMapPath;
+            bool envLoaded = false;
+
+            // Try PFM format (equirectangular float image → GPU cubemap)
+            namespace fs = std::filesystem;
+            std::string ext = fs::path(result.envMapPath).extension().string();
+            // lowercase the extension for comparison
+            for (char& c : ext) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+
+            if (ext == ".pfm") {
+                auto hdr = utils::LoadPFMImage(result.envMapPath);
+                if (hdr.pixels) {
+                    auto cubemap    = utils::LoadCubemapFromEquirectangular(m_Device.get(), hdr, 256);
+                    auto irradiance = utils::ComputeIrradianceCubemap(m_Device.get(), hdr, 32);
+                    utils::FreeHDRImage(hdr);
+                    if (cubemap) {
+                        m_EnvironmentMap = std::move(cubemap);
+                        RecreateSkyboxDescriptorSets();
+                        m_ShowSkybox  = true;
+                        m_SkyboxLOD   = 0.0f;
+                        envLoaded = true;
+                        METAGFX_INFO << "PFM environment map loaded as skybox cubemap";
+                    }
+                    if (irradiance) {
+                        m_IrradianceMap = std::move(irradiance);
+                        // IBL is left off by default — the scene's own lights provide direct illumination.
+                        // The user can enable IBL and adjust intensity via the GUI if desired.
+                        METAGFX_INFO << "Diffuse irradiance cubemap computed from PFM (IBL ready, off by default)";
+                    }
+                }
+            }
+
+            if (!envLoaded) {
+                METAGFX_INFO << "Unsupported env map format or load failed for: " << result.envMapPath;
+                METAGFX_INFO << "To use as IBL run: ./bin/tools/ibl_precompute \""
+                             << result.envMapPath << "\" assets/envmaps/ && restart the app";
+            }
+        }
+
         UpdateGroundPlanePosition();
 
         m_Device->WaitIdle();
@@ -783,6 +829,35 @@ void Application::CreateMeshDescriptorSets() {
 
     METAGFX_INFO << "CreateMeshDescriptorSets: created " << meshes.size()
                  << " per-mesh descriptor set pair(s)";
+}
+
+void Application::RecreateSkyboxDescriptorSets() {
+    using namespace rhi;
+    if (!m_EnvironmentMap) return;
+
+    m_Device->WaitIdle();
+
+    for (uint32 frameIndex = 0; frameIndex < 2; ++frameIndex) {
+        m_SkyboxDescriptorSet[frameIndex].reset();
+
+        std::vector<DescriptorBindingDesc> skyboxBindings = {
+            { BINDING(m_Config.graphicsAPI, SkyboxBindings::MVP),
+              DescriptorType::UniformBuffer, ShaderStage::Vertex,
+              m_UniformBuffers[frameIndex], nullptr, nullptr },
+            { BINDING(m_Config.graphicsAPI, SkyboxBindings::ENVIRONMENT),
+              DescriptorType::SampledTexture, ShaderStage::Fragment,
+              nullptr, m_EnvironmentMap, m_CubemapSampler },
+            { BINDING(m_Config.graphicsAPI, SkyboxBindings::PUSH_CONSTANTS),
+              DescriptorType::UniformBuffer, ShaderStage::Fragment,
+              m_SkyboxPushConstantBuffer, nullptr, nullptr }
+        };
+
+        rhi::DescriptorSetDesc desc;
+        desc.bindings  = skyboxBindings;
+        desc.debugName = "SkyboxDescriptorSet";
+        m_SkyboxDescriptorSet[frameIndex] = m_Device->CreateDescriptorSet(desc);
+    }
+    METAGFX_INFO << "Skybox descriptor sets recreated with new environment map";
 }
 
 void Application::LoadNextModel() {
@@ -2564,7 +2639,9 @@ void Application::RenderImGui(Ref<rhi::CommandBuffer> cmd, Ref<rhi::Texture> bac
             "Metal Rough Spheres",
             "Cornell Box (PBRT)",
             "Cornell Box Bitterli",
-            "Contemporary Bathroom"
+            "Contemporary Bathroom",
+            "Milestone 5.2 Test",
+            "Classroom"
         };
         int currentModel = m_CurrentModelIndex;
         if (ImGui::Combo("Model", &currentModel, modelNames, IM_ARRAYSIZE(modelNames))) {

@@ -29,7 +29,9 @@ PbrtLoadResult PbrtLoader::Load(rhi::GraphicsDevice* device,
     }
 
     // ── Camera ────────────────────────────────────────────────────────────────
-    out.camera = parsed.camera;
+    out.camera      = parsed.camera;
+    out.envMapPath  = parsed.envMapPath;
+    out.envMapScale = parsed.envMapScale;
 
     // ── Assemble Model ───────────────────────────────────────────────────────
     if (parsed.meshes.empty()) {

@@ -6,12 +6,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 MetaGFX is a backend-agnostic physically-based renderer implementing a common abstract core with multiple graphics API backends (Vulkan, Direct3D 12, Metal, WebGPU). The project is organized around a phased roadmap with milestones tracked in `claude/metagfx_roadmap.md`.
 
-**Current Status**: Milestone 5.1 completed (Basic PBRT v4 Parser). The renderer supports:
+**Current Status**: Milestone 5.2 completed (Advanced PBRT Features). The renderer supports:
 - **Multi-Backend Rendering**: Vulkan (Windows, Linux, macOS), Metal (macOS), and WebGPU (Windows, macOS, Linux, Web)
 - Physically-Based Rendering (PBR) with Cook-Torrance BRDF
 - Real-time shadow mapping with PCF filtering from directional lights
 - Model loading from various formats (OBJ, FBX, glTF, COLLADA)
-- **PBRT v4 scene loading**: trianglemesh, plymesh, all material types, lights, camera
+- **PBRT v4 scene loading**: trianglemesh, plymesh, all material types, lights, camera, object instancing, procedural shapes (sphere, disk), spot lights, infinite lights (HDR env maps), normal/roughness/metallic texture maps, mix and measured materials, TransformBegin/End
+- **HDR environment map pipeline**: PFM loader, equirectangular-to-cubemap (R16F), irradiance cubemap via Fibonacci Monte Carlo (R16F)
 - Full material system (albedo, roughness, metallic, emissive, normal maps)
 - Image-Based Lighting (IBL) with environment maps and cubemap skybox
 - Skybox rendering with LOD control (all 6 cubemap faces)
@@ -323,7 +324,7 @@ Key documentation files:
 - `docs/vulkan.md` - Vulkan backend implementation details
 - `docs/metal.md` - Metal backend implementation with metal-cpp (NEW)
 - `docs/camera_transformation_system.md` - Camera implementation details
-- `docs/asset_loading.md` - Asset loading system (Mesh/Model, Assimp, PBRT v4 parser, texture loading, LOD, instancing)
+- `docs/asset_loading.md` - Asset loading system (Mesh/Model, Assimp, PBRT v4 parser + advanced features, HDR env map pipeline, texture loading, LOD, instancing)
 - `docs/material_system.md` - Material system and Blinn-Phong lighting
 - `docs/textures_and_samplers.md` - Texture loading, sampling, and material integration
 - `docs/light_system.md` - Light system design and implementation
